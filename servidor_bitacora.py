@@ -11,6 +11,7 @@ from http.server import ThreadingHTTPServer
 
 import config
 from almacen import AlmacenBitacora
+from bot_comandos import BotComandos
 from manejador_http import ManejadorBitacora
 from notificador_telegram import NotificadorTelegram
 
@@ -82,12 +83,26 @@ def main():
         return 1
 
     credenciales = "activo" if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID else "SIN credenciales"
-    print("Bitacora HTTPS escuchando en https://%s:%d (Telegram: %s)" % (config.HOST, config.PUERTO, credenciales))
+    bot = None
+    if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID and config.BOT_COMANDOS:
+        bot = BotComandos(
+            config.TELEGRAM_BOT_TOKEN,
+            config.TELEGRAM_ADMIN_IDS,
+            almacen,
+            info_servidor={"puerto": config.PUERTO, "tls": "HTTPS/TLS, minimo TLS 1.2"},
+        )
+        bot.iniciar()
+    print(
+        "Bitacora HTTPS escuchando en https://%s:%d (Telegram: %s, comandos del bot: %s)"
+        % (config.HOST, config.PUERTO, credenciales, "activos" if bot else "desactivados")
+    )
     try:
         servidor.serve_forever()
     except KeyboardInterrupt:
         print("\nDeteniendo servidor...")
     finally:
+        if bot:
+            bot.detener()
         servidor.server_close()
     return 0
 

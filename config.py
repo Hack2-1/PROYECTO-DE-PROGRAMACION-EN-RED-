@@ -44,4 +44,11 @@ RUTA_ALERTAS = _ruta("RUTA_ALERTAS", "alertas_telegram.json")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_TIMEOUT = _entero("TELEGRAM_TIMEOUT", 5)
+# Administradores autorizados a usar comandos (ids separados por coma); siempre incluye el chat id.
+TELEGRAM_ADMIN_IDS = {
+    i.strip()
+    for i in (os.environ.get("TELEGRAM_ADMIN_IDS", "") + "," + TELEGRAM_CHAT_ID).split(",")
+    if i.strip()
+}
+BOT_COMANDOS = os.environ.get("BOT_COMANDOS", "1").strip() not in ("0", "false", "no")
 UMBRAL_ABIERTAS = _entero("UMBRAL_ABIERTAS", 3)

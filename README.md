@@ -34,6 +34,20 @@ python3 -m unittest discover -s tests -v
 
 ## Telegram
 
+Con el servidor en marcha, el administrador puede consultar el estado desde el chat del bot
+(solo responde a `TELEGRAM_CHAT_ID` y a los ids de `TELEGRAM_ADMIN_IDS`):
+
+| Comando | Respuesta |
+| :--- | :--- |
+| `/estado` | Servidor activo, uptime, puerto/TLS, incidencias, peticiones, rechazos TLS |
+| `/incidencias` | Conteo por estado y últimas abiertas |
+| `/contadores` | Peticiones por método y familia 2xx/4xx/5xx |
+| `/alertas` | Últimas alertas enviadas |
+| `/ayuda` | Lista de comandos |
+
+> Solo **un** proceso a la vez puede escuchar comandos con el mismo token. Si otro compañero levanta el servidor con
+> el mismo token, uno de los dos verá un aviso 409; usen `BOT_COMANDOS=0` en el segundo.
+
 ```bash
 python3 notificador_telegram.py --verificar   # valida el token (getMe)
 python3 notificador_telegram.py --prueba      # envía un mensaje de prueba
