@@ -1,0 +1,131 @@
+import json
+import os
+import sys
+import tempfile
+import threading
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from almacen import AlmacenBitacora  # noqa: E402
+
+
+class PruebasAlmacen(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.ruta = os.path.join(self.dir.name, "incidencias.json")
+        self.ruta_alertas = os.path.join(self.dir.name, "alertas.json")
+        self.almacen = AlmacenBitacora(self.ruta, self.ruta_alertas)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_crear_asigna_id_hora_y_estado_por_defecto(self):
+        inc, snapshot = self.almacen.crear_incidencia("vulnerabilidad", "Puerto 23 abierto")
+        self.assertEqual(inc["id"], 1)
+        self.assertEqual(inc["estado"], "abierta")
+        self.assertIn("hora", inc)
+        self.assertEqual(len(snapshot), 1)
+
+    def test_persiste_formato_del_contrato(self):
+        self.almacen.crear_incidencia("alerta", "x")
+        with open(self.ruta, encoding="utf-8") as f:
+            datos = json.load(f)
+        self.assertEqual(datos["siguiente_id"], 2)
+        self.assertEqual(datos["incidencias"][0]["id"], 1)
+
+    def test_validaciones(self):
+        with self.assertRaises(ValueError):
+            self.almacen.crear_incidencia("", "desc")
+        with self.assertRaises(ValueError):
+            self.almacen.crear_incidencia("alerta", "   ")
+        with self.assertRaises(ValueError):
+            self.almacen.crear_incidencia("alerta", "d", estado="cerrada")
+        with self.assertRaises(ValueError):
+            self.almacen.crear_incidencia(5, "d")
+
+    def test_id_no_se_reutiliza_tras_delete_ni_tras_reinicio(self):
+        self.almacen.crear_incidencia("a", "1")
+        self.almacen.crear_incidencia("a", "2")
+        self.assertTrue(self.almacen.eliminar_incidencia(2))
+        nuevo, _ = self.almacen.crear_incidencia("a", "3")
+        self.assertEqual(nuevo["id"], 3)
+        self.almacen.eliminar_incidencia(3)
+        reiniciado = AlmacenBitacora(self.ruta, self.ruta_alertas)
+        nuevo, _ = reiniciado.crear_incidencia("a", "4")
+        self.assertEqual(nuevo["id"], 4)
+
+    def test_filtros_y_obtener(self):
+        self.almacen.crear_incidencia("alerta", "a")
+        self.almacen.crear_incidencia("incidente", "b", estado="resuelta")
+        self.assertEqual(len(self.almacen.listar_incidencias(tipo="alerta")), 1)
+        self.assertEqual(len(self.almacen.listar_incidencias(estado="resuelta")), 1)
+        self.assertEqual(len(self.almacen.listar_incidencias(tipo="alerta", estado="resuelta")), 0)
+        self.assertEqual(self.almacen.obtener_incidencia(2)["descripcion"], "b")
+        self.assertIsNone(self.almacen.obtener_incidencia(99))
+
+    def test_actualizar_estado_y_reemplazar(self):
+        self.almacen.crear_incidencia("alerta", "a")
+        self.assertEqual(self.almacen.actualizar_estado(1, "en_proceso")["estado"], "en_proceso")
+        with self.assertRaises(ValueError):
+            self.almacen.actualizar_estado(1, "inventado")
+        self.assertIsNone(self.almacen.actualizar_estado(9, "resuelta"))
+        nueva = self.almacen.reemplazar_incidencia(1, "incidente", "nueva")
+        self.assertEqual((nueva["tipo"], nueva["estado"]), ("incidente", "abierta"))
+        self.assertIsNone(self.almacen.reemplazar_incidencia(9, "a", "b"))
+
+    def test_carga_lista_directa_compatible(self):
+        with open(self.ruta, "w", encoding="utf-8") as f:
+            json.dump([{"id": 7, "tipo": "a", "descripcion": "d", "estado": "abierta", "hora": "h"}], f)
+        almacen = AlmacenBitacora(self.ruta, self.ruta_alertas)
+        nuevo, _ = almacen.crear_incidencia("a", "d2")
+        self.assertEqual(nuevo["id"], 8)
+
+    def test_archivo_corrupto_se_aparta_sin_caerse(self):
+        with open(self.ruta, "w", encoding="utf-8") as f:
+            f.write("{esto no es json")
+        almacen = AlmacenBitacora(self.ruta, self.ruta_alertas)
+        self.assertEqual(almacen.listar_incidencias(), [])
+        self.assertTrue(any(n.startswith("incidencias.json.corrupto-") for n in os.listdir(self.dir.name)))
+
+    def test_concurrencia_ids_unicos_y_json_integro(self):
+        hilos, por_hilo = 8, 15
+
+        def trabajo(n):
+            for i in range(por_hilo):
+                self.almacen.crear_incidencia("alerta", "h%d-%d" % (n, i))
+
+        lanzados = [threading.Thread(target=trabajo, args=(n,)) for n in range(hilos)]
+        for h in lanzados:
+            h.start()
+        for h in lanzados:
+            h.join()
+        ids = [i["id"] for i in self.almacen.listar_incidencias()]
+        self.assertEqual(len(ids), hilos * por_hilo)
+        self.assertEqual(len(set(ids)), hilos * por_hilo)
+        with open(self.ruta, encoding="utf-8") as f:
+            disco = json.load(f)
+        self.assertEqual(len(disco["incidencias"]), hilos * por_hilo)
+        self.assertEqual(disco["siguiente_id"], hilos * por_hilo + 1)
+
+    def test_contadores_y_logs(self):
+        self.almacen.registrar_peticion("GET", "/salud", 200, "1.1.1.1")
+        self.almacen.registrar_peticion("GET", "/x", 404, "1.1.1.1")
+        self.almacen.registrar_peticion("POST", "/incidencias", 201, "1.1.1.1")
+        self.almacen.registrar_evento("TLS_RECHAZADO", "2.2.2.2", "HTTP plano")
+        c = self.almacen.obtener_contadores()
+        self.assertEqual(c["total"], 3)
+        self.assertEqual(c["por_metodo"], {"GET": 2, "POST": 1})
+        self.assertEqual(c["por_familia"], {"2xx": 2, "4xx": 1})
+        self.assertEqual(len(self.almacen.obtener_logs()), 4)
+
+    def test_registro_de_alertas(self):
+        self.assertEqual(self.almacen.cargar_alertas(), [])
+        a1 = self.almacen.registrar_alerta({"incidencia_id": 1, "estado_envio": "ENVIADO"})
+        a2 = self.almacen.registrar_alerta({"incidencia_id": 2, "estado_envio": "ERROR_API"})
+        self.assertEqual((a1["id_alerta"], a2["id_alerta"]), (1, 2))
+        self.assertEqual(len(self.almacen.cargar_alertas()), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
