@@ -6,3 +6,4 @@ incidencias.json.corrupto-*
 __pycache__/
 *.pyc
 .venv/
+.vscode/
