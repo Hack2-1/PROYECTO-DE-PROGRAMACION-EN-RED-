@@ -22,6 +22,16 @@ Tanto Rodrigo como Fernanda implementan métodos dentro de `manejador_http.py`. 
    - **Fernanda** solo modifica `do_PATCH`, `do_PUT`, `do_DELETE` y `manejar_get_auditoria` (marcados bajo `ZONA FERNANDA`), además de su archivo `cliente_admin.py`.
 2. **Nunca** cambien la firma de `_enviar_json`, `_leer_json_cuerpo`, `do_GET` o los métodos de `almacen.py` sin acordarlo antes.
 
+### 2.1 Archivos y Credenciales de Acceso Exclusivo (Eddi Michael)
+
+Para mantener la estabilidad del servidor TLS y la seguridad del Bot de Telegram, se restringe el acceso de la siguiente forma:
+
+- **Archivos bloqueados (solo Eddi Michael):** `servidor_bitacora.py`, `almacen.py`, `notificador_telegram.py`, `bot_comandos.py`, `config.py`, `scripts/generar_certificados.py` y las utilidades base de `manejador_http.py`. Rodrigo y Fernanda no deben modificar estos archivos ni cambiar su comportamiento.
+- **Credenciales y Llave Privada (solo Eddi Michael):** El archivo `.env` (`TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`) y la llave privada `llave.pem` viven únicamente en el equipo de Eddi Michael.
+  - **Pruebas en red local (LAN):** Eddi levanta el servidor central y solo comparte el archivo público `certificado.pem` para que `agente_puertos.py` y `cliente_admin.py` se conecten a `https://<IP_SERVIDOR_EDDI>:8443` usando `verify="certificado.pem"`.
+  - **Pruebas unitarias/locales en otros equipos:** Si Rodrigo o Fernanda corren el servidor en su propia máquina para pruebas locales, deben hacerlo **sin `.env`** (modo local `SIN_CREDENCIALES` en `alertas_telegram.json` y sin polling del bot, evitando conflictos 409).
+- **Verificación antes de integrar:** Antes de aceptar un Pull Request hacia `main`, ejecutar `python3 scripts/verificar_zonas.py` para confirmar que las ramas de Rodrigo y Fernanda no alteraron ningún archivo exclusivo de Eddi.
+
 ---
 
 ## 3. Orden Recomendado de Integración

@@ -21,6 +21,7 @@ python3 -m unittest discover -s tests -v
 | `servidor_bitacora.py` | Eddi | F1 servidor concurrente HTTPS/TLS |
 | `almacen.py` | Eddi | F2 persistencia JSON con `threading.Lock` |
 | `notificador_telegram.py` | Eddi | F3 umbrales + Bot de Telegram |
+| `bot_comandos.py` | Eddi | F3 (mejora) comandos `/estado`, `/incidencias`, `/contadores`, `/alertas`, `/ayuda` |
 | `manejador_http.py` | Rodrigo (F4, F5) / Fernanda (F7, F8) | Endpoints REST |
 | `agente_puertos.py` | Rodrigo | F6 agente de puertos |
 | `cliente_admin.py` | Fernanda | F9 cliente CLI |
@@ -34,8 +35,13 @@ python3 -m unittest discover -s tests -v
 
 ## Telegram
 
-Con el servidor en marcha, el administrador puede consultar el estado desde el chat del bot
-(solo responde a `TELEGRAM_CHAT_ID` y a los ids de `TELEGRAM_ADMIN_IDS`):
+La administración del Bot (`@monitor_incidentes_bot`), el archivo `.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`)
+y la ejecución del servidor central con polling activo son **exclusivos de Eddi Michael** (`TELEGRAM_CHAT_ID` autorizado).
+Los demás integrantes trabajan **sin `.env`** (modo local `SIN_CREDENCIALES` y comandos inactivos) o conectándose
+como clientes HTTPS al servidor de Eddi usando únicamente el certificado público `certificado.pem`.
+
+Con el servidor de Eddi en marcha, el administrador autorizado puede consultar el estado desde el chat del bot
+(solo responde a `TELEGRAM_CHAT_ID` y a los ids de `TELEGRAM_ADMIN_IDS`; cualquier otro chat es rechazado y auditado):
 
 | Comando | Respuesta |
 | :--- | :--- |
