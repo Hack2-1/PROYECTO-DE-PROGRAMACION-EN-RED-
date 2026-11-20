@@ -1,0 +1,793 @@
+Práctica 11 (Parte B): Propuesta de Solución y Diagramas de Flujo de Datos
+(DFD)
+Proyecto Integrador: Sistema Ligero de Monitoreo de Incidencias en Red Local para MiPyMEs sobre
+HTTPS/TLS con Alerta Temprana por Umbrales vía Bot de Telegram
+Equipo: Equipo 01 (bitacora-equipo-01) — Experiencia Educativa: Programación en Red (NRC 19141)
+Integrantes: 1. Eddi Michael Hernández Rodríguez · 2. Rodrigo García · 3. Fernanda
+
+1. Arquitectura de Alojamiento, Tecnologías del Curso y Alcance del Análisis
+El proyecto se construye estrictamente sobre las tecnologías y protocolos vistos a lo largo de la
+experiencia educativa Programación en Red —servidor HTTP propio en Python con http.server y
+concurrencia por hilos, sincronización con threading.Lock, persistencia en archivos JSON en disco,
+sockets TCP, consumo de servicios con requests y cifrado TLS/HTTPS con OpenSSL—,
+incorporando como valor agregado ligero un módulo de notificación por umbrales hacia un Bot de
+Telegram (integrado con conocimientos de otras experiencias educativas mediante peticiones HTTP
+estándar, sin dependencias pesadas).
+1.1 ¿Dónde está alojado el sistema? (Despliegue On-Premise en LAN Privada)
+Debido a que las Micro y Pequeñas Empresas (MiPyMEs) locales (consultorios, farmacias,
+despachos contables y comercios) carecen de presupuesto para licencias SIEM o servidores en la
+nube, el sistema se aloja de forma 100 % local y autohospedada (On-Premise) dentro de la red
+privada LAN del negocio (por ejemplo, subred 192.168.1.0/24):
+Nodo Servidor Central (Servidor HTTP/REST Multihilo sobre TLS): Corre en un equipo Linux
+ya existente del negocio (equipo de caja principal, servidor de oficina o Mini-PC) escuchando en
+una IP fija sobre el puerto seguro 8443/TCP mediante ThreadingHTTPServer envuelto en
+ssl.SSLContext (certificado X.509 de OpenSSL). Toda la información se persiste en disco en
+archivos JSON locales: incidencias.json (almacén principal D1) y alertas_telegram.json
+(bitácora auxiliar del módulo de notificaciones).
+Nodos Clientes / Agentes de Monitoreo: En las terminales de la MiPyME se ejecuta el script
+ligero agente_puertos.py, que utiliza socket.connect_ex() para detectar puertos no autorizados
+y reportar incidencias cifradas por HTTPS al servidor central.
+Módulo Extra de Alerta Temprana (Bot de Telegram con Bitácora Local): Cuando una
+incidencia supera los umbrales definidos, el servidor actúa como cliente HTTPS saliente
+consumiendo la API oficial de Telegram (https://api.telegram.org/bot<TOKEN>/sendMessage)
+mediante requests.post(), guardando siempre el resultado (éxito o fallo sin Internet) en
+alertas_telegram.json.
+Cliente Administrativo de Terminal: El encargado o técnico de soporte gestiona y audita la
+bitácora desde su consola usando cliente_admin.py (o curl --cacert certificado.pem) sin
+necesidad de interfaz gráfica.
+
+Universidad Veracruzana · Programación en Red (NRC 19141) · Práctica 11 (Parte B)
+
+Page 1 of 9
+
+1.2 ¿Qué analiza el sistema? (Vectores de Monitoreo y Reglas de Umbral)
+1. Puertos y servicios expuestos en terminales de la LAN: El agente escanea puertos sensibles
+locales (21/FTP, 22/SSH, 23/Telnet, 445/SMB, 3389/RDP) con sockets TCP; si detecta alguno
+abierto fuera de la lista blanca, genera automáticamente un POST /incidencias con tipo
+vulnerabilidad o alerta.
+2. Ciclo de vida y auditoría de tráfico HTTP: El servidor valida el vocabulario controlado de
+estados (abierta, en_proceso, resuelta) y contabiliza en tiempo real cada petición por método y
+familia de código (2xx, 4xx, 5xx) a través de /logs y /contadores.
+3. Evaluación de umbrales para Bot de Telegram (Módulo Extra): Para evitar saturación de
+mensajes (alert fatigue), solo dispara una notificación al celular del encargado cuando: (a) ingresa
+una incidencia de tipo incidente crítico (umbral directo 1/1), o (b) se acumulan ≥ 3 incidencias en
+estado abierta sin atender en incidencias.json (umbral de acumulación).
+
+2. Estructura por Ramas de Git y Listado de Funcionalidades (9 Funciones)
+Para garantizar la participación individual verificable en el historial de commits y evitar conflictos al
+integrar el código, el repositorio bitacora-equipo-01 se organiza en una rama principal estable
+(main) y tres ramas de trabajo independientes —una por integrante—, cada una responsable de
+módulos específicos y 3 funciones concretas alineadas al temario del curso (Tabla 1).
+Tabla 1
+Distribución por ramas de Git, archivos y 9 funcionalidades del sistema (3 por integrante)
+Integrante /
+Rama Git
+
+Función y Archivo
+
+Descripción Técnica y Tema del
+Curso
+
+Entrada
+
+Salida
+
+Eddi Michael
+(Integrante A)
+Rama:
+
+F1. Servidor
+concurrente sobre
+HTTPS/TLS
+
+Inicializa ThreadingHTTPServer
+en el puerto 8443 y envuelve el
+socket TCP con ssl.SSLContext
+usando certificado.pem y
+llave.pem (OpenSSL). Tema:
+Concurrencia y TLS/HTTPS.
+
+Conexiones TCP
+entrantes y
+archivos PEM de
+OpenSSL.
+
+Canal cifrado
+multihilo
+escuchando en
+
+Implementa cargar() y
+guardar() sobre
+incidencias.json protegiendo
+la sección crítica con
+threading.Lock() para evitar
+corrupción cuando 3 o más clientes
+escriben a la vez. Tema:
+Sincronización y serialización
+JSON.
+
+Lista de
+incidencias en
+memoria y
+solicitudes de
+lectura/escritura.
+
+feature/se
+rvidortlsalertas
+
+servidor_bitac
+ora.py
+
+F2. Persistencia
+concurrente en
+JSON con candado
+almacen.py
+
+Universidad Veracruzana · Programación en Red (NRC 19141) · Práctica 11 (Parte B)
+
+https://IP:8
+443; rechazo a
+
+HTTP plano.
+Archivo
+
+incidencias.
+json íntegro en
+
+disco y folio
+
+siguiente_id
+
+consistente.
+
+Page 2 of 9
+
+Integrante /
+Rama Git
+
+Función y Archivo
+
+F3 (Extra).
+Motor de
+umbrales y Bot
+de Telegram
+con bitácora
+
+Evalúa si la
+Incidencia recién creada y conteo
+incidencia supera el actual de casos abiertos.
+umbral (tipo crítico o
+≥ 3 incidencias
+abiertas), envía
+alerta mediante
+
+notificado
+r_telegram
+.py
+
+Descripción Técnica y Tema del
+Curso
+
+requests.post(
+) con timeout=5
+
+Entrada
+
+Salida
+
+Mensaje en
+Telegram (si
+supera umbral) +
+registro auditable
+en
+alertas_tele
+gram.json.
+
+a Telegram y
+guarda el resultado
+en
+
+alertas_telegr
+am.json dentro de
+un try/except.
+
+Tema: Cliente HTTP
+y tolerancia a fallos.
+Rodrigo
+García
+(Integrante B)
+Rama:
+
+feature/re
+gistroconsultasagente
+
+F4. Registro y
+validación de
+incidencias
+(do_POST)
+
+Recibe POST /incidencias,
+valida campos obligatorios (tipo,
+descripcion) y vocabulario
+controlado de estado, guarda con
+almacen.py e invoca F3 para
+evaluar umbrales. Tema: Protocolo
+HTTP / API REST.
+
+JSON:
+
+F5. Consultas con
+filtros combinados y
+detalle (do_GET)
+
+Atiende GET /incidencias con
+filtros por query string (?
+tipo=...&estado=... usando
+parse_qs) y GET
+/incidencias/<id> validando
+identificadores enteros. Tema:
+Rutas y parámetros HTTP.
+
+URL con filtros
+opcionales o
+identificador
+numérico en ruta.
+
+200 OK con
+
+F6. Agente monitor
+de puertos en la
+LAN
+
+Recorre puertos críticos locales con
+socket.connect_ex(); al
+detectar un puerto abierto fuera de
+la lista blanca, envía
+automáticamente un POST
+/incidencias por HTTPS
+validando certificado.pem.
+Tema: Sockets TCP y cliente
+HTTPS.
+
+Lista de puertos a
+vigilar, lista
+blanca local e IP
+del servidor.
+
+Reporte JSON
+automático al
+servidor o
+registro local
+temporal si falla
+la red.
+
+manejador_http
+.py
+
+manejador_http
+.py
+
+agente_puertos
+.py
+
+Universidad Veracruzana · Programación en Red (NRC 19141) · Práctica 11 (Parte B)
+
+{"tipo",
+"descripcion
+", "estado"}
+
+201 Created
+
+con incidencia
+creada (incluye
+id y hora); o
+400 Bad
+Request.
+
+lista/objeto
+JSON; 400 si el
+ID no es entero;
+404 si no existe.
+
+Page 3 of 9
+
+Integrante /
+Rama Git
+Fernanda
+(Integrante C)
+Rama:
+
+feature/ge
+stionauditoriacliente
+
+Función y Archivo
+
+Descripción Técnica y Tema del
+Curso
+
+F7. Actualización
+parcial y reemplazo
+completo
+(do_PATCH /
+do_PUT)
+
+Implementa PATCH
+
+F8. Eliminación y
+endpoints de
+auditoría
+(do_DELETE y
+métricas)
+
+Implementa DELETE
+
+manejador_http
+.py
+
+manejador_http
+.py
+
+/incidencias/<id> para
+cambiar estado validado y PUT
+/incidencias/<id> para
+
+reemplazo completo reiniciando el
+estado a abierta con persistencia
+en disco. Tema: Métodos de
+actualización REST.
+/incidencias/<id> y expone
+las rutas de solo lectura GET
+/logs, GET /contadores (por
+método y familia 2xx/4xx/5xx) y
+GET /alertas (lectura de
+alertas_telegram.json).
+
+Entrada
+
+Salida
+
+ID en ruta +
+cuerpo JSON con
+campos a
+modificar o
+reemplazar.
+
+200 OK con
+
+Peticiones
+DELETE con ID o
+GET a rutas de
+auditoría.
+
+204 No
+Content al
+borrar; 200 OK
+
+Comandos de
+usuario en
+consola y
+parámetros de
+prueba.
+
+Consumo
+completo del
+CRUD en
+consola y
+evidencia de
+concurrencia y
+tolerancia a
+fallos.
+
+recurso
+actualizado; 400
+por estado
+inválido; 404 si
+no existe.
+
+con métricas y
+bitácoras JSON.
+
+Tema: Gestión de recursos y
+bitácora.
+F9. Cliente CLI y
+pruebas de
+concurrencia / fallos
+cliente_admin.
+py
+
+Construye el cliente de terminal
+interactivo con requests
+(verify="certificado.pem")
+e incluye las rutinas de prueba con
+3 o más hilos simultáneos y
+simulación de desconexión abrupta.
+Tema: Consumo REST y manejo de
+errores.
+
+Nota. Flujo de integración en Git: cada integrante desarrolla en su rama asignada, realiza commits propios de sus 3
+funciones y abre un Pull Request hacia main una vez verificadas las pruebas.
+
+3. Diseño Algorítmico de Alto Nivel
+A continuación se describen en pseudocódigo limpio los tres algoritmos que coordinan la operación
+concurrente del servidor, el motor de umbrales hacia Telegram y el agente de puertos en las
+terminales.
+
+Universidad Veracruzana · Programación en Red (NRC 19141) · Práctica 11 (Parte B)
+
+Page 4 of 9
+
+3.1 Algoritmo 1: Servidor HTTP/REST Concurrente sobre TLS con Persistencia JSON
+ALGORITMO 1: Servidor_Bitacora_HTTPS (servidor_bitacora.py + almacen.py +
+manejador_http.py)
+ENTRADA: Peticiones HTTPS concurrentes en el puerto 8443/TCP
+SALIDA: Respuestas HTTP en formato JSON + Persistencia segura en incidencias.json
+1. INICIO
+2.
+Crear Candado_Global (threading.Lock) y cargar incidencias desde "incidencias.json"
+en memoria
+3.
+Calcular siguiente_id = max(id) + 1 (o 1 si el archivo está vacío o no existe)
+4.
+Configurar contexto TLS (ssl.PROTOCOL_TLS_SERVER) con "certificado.pem" y
+"llave.pem"
+5.
+Iniciar ThreadingHTTPServer en (0.0.0.0, 8443) envolviendo el socket con
+contexto.wrap_socket()
+6.
+MIENTRAS el servidor esté en ejecución HACER:
+7.
+Aceptar conexión de cliente o agente en un hilo independiente
+8.
+INTENTAR:
+9.
+Completar Handshake TLS; SI llega HTTP plano ENTONCES reiniciar conexión y
+registrar rechazo
+10.
+Parsear ruta y parámetros de consulta con urlparse() y parse_qs()
+11.
+SI Método es POST, PUT o PATCH ENTONCES leer Content-Length y decodificar JSON
+(si falla -> 400)
+12.
+SEGÚN Método y Ruta HACER:
+13.
+CASO POST /incidencias:
+Validar campos y estado; adquirir
+Candado_Global; guardar en disco;
+invocar Algoritmo 2 (Evaluar_Umbral_Telegram);
+responder 201
+14.
+CASO GET /incidencias:
+Aplicar filtros opcionales (?tipo, ?estado) y
+responder 200
+15.
+CASO GET /incidencias/<id>:
+Buscar por ID entero; responder 200 (o 404 si
+no existe)
+16.
+CASO PATCH / PUT /<id>:
+Validar estado/campos; adquirir Candado_Global;
+actualizar disco; responder 200
+17.
+CASO DELETE /incidencias/<id>: Adquirir Candado_Global; eliminar registro y
+guardar disco; responder 204
+18.
+CASO GET /logs, /contadores, /alertas: Devolver estructuras de auditoría en
+JSON con código 200
+19.
+FIN SEGÚN
+20.
+Actualizar logs y contadores por método y familia de código bajo Candado_Global
+21.
+CAPTURAR (BrokenPipeError, ConnectionResetError, OSError):
+22.
+Liberar recursos del hilo sin detener el servidor ni corromper incidencias.json
+(Tolerancia a fallos)
+23.
+FIN INTENTAR
+24. FIN MIENTRAS
+25. FIN
+
+Universidad Veracruzana · Programación en Red (NRC 19141) · Práctica 11 (Parte B)
+
+Page 5 of 9
+
+3.2 Algoritmo 2: Módulo Extra — Motor de Umbrales y Bitácora de Telegram
+ALGORITMO 2: Evaluar_Umbral_Telegram (notificador_telegram.py)
+ENTRADA: incidencia_nueva, lista_incidencias, UMBRAL_ABIERTAS = 3
+SALIDA: Notificación HTTPS a Telegram (si supera umbral) + Registro en
+alertas_telegram.json
+1. INICIO
+2.
+Contar total_abiertas = cantidad de registros en lista_incidencias con estado ==
+"abierta"
+3.
+SI incidencia_nueva["tipo"] == "incidente" ENTONCES:
+4.
+motivo = "UMBRAL_CRITICO_DIRECTO (1/1)"
+5.
+SINO SI total_abiertas >= UMBRAL_ABIERTAS ENTONCES:
+6.
+motivo = "UMBRAL_ACUMULACION (" + total_abiertas + " abiertas >= 3)"
+7.
+SINO:
+8.
+RETORNAR "BAJO_UMBRAL"
+// Se registra en incidencias.json pero no genera spam
+en Telegram
+9.
+FIN SI
+10. Construir texto de alerta con ID, tipo, descripción, motivo del umbral y hora
+11. INTENTAR:
+12.
+respuesta = requests.post("https://api.telegram.org/bot<TOKEN>/sendMessage",
+json={"chat_id": CHAT_ID, "text": texto}, timeout=5)
+13.
+estado_envio = "ENVIADO" SI respuesta.status_code == 200 SINO "ERROR_API"
+14.
+codigo_http = respuesta.status_code
+15. CAPTURAR (requests.RequestException):
+16.
+estado_envio = "FALLIDO_SIN_INTERNET"
+// El servidor LAN continúa operando
+normalmente
+17.
+codigo_http = 503
+18. FIN INTENTAR
+19. Guardar evento (hora, incidencia_id, motivo, estado_envio, codigo_http) en
+"alertas_telegram.json"
+20. FIN
+
+3.3 Algoritmo 3: Agente de Monitoreo de Puertos con Sockets TCP
+ALGORITMO 3: Agente_Puertos_LAN (agente_puertos.py)
+ENTRADA: Lista_Puertos = [21, 22, 23, 445, 3389], Lista_Blanca, URL_Servidor,
+"certificado.pem"
+SALIDA: Envío automático de incidencias por HTTPS al servidor central
+1. INICIO
+2.
+PARA CADA puerto EN Lista_Puertos HACER:
+3.
+Crear socket TCP IPv4 (AF_INET, SOCK_STREAM) con timeout = 1.5 s
+4.
+resultado = socket.connect_ex(("127.0.0.1", puerto))
+5.
+Cerrar socket
+6.
+SI resultado == 0 Y puerto NO ESTÁ EN Lista_Blanca ENTONCES:
+7.
+payload = {"tipo": "vulnerabilidad", "descripcion": "Puerto no autorizado
+abierto: " + puerto}
+8.
+INTENTAR:
+9.
+requests.post(URL_Servidor + "/incidencias", json=payload,
+verify="certificado.pem", timeout=5)
+10.
+CAPTURAR (requests.RequestException):
+11.
+Imprimir aviso controlado sin detener el ciclo de monitoreo del equipo
+12.
+FIN INTENTAR
+13.
+FIN SI
+14. FIN PARA
+15. FIN
+
+Universidad Veracruzana · Programación en Red (NRC 19141) · Práctica 11 (Parte B)
+
+Page 6 of 9
+
+4. Diagramas de Flujo de Datos (DFD de Contexto y Nivel 1)
+Los Diagramas de Flujo de Datos muestran de manera consistente las entidades externas, los
+procesos y el almacén persistente D1 (incidencias.json), correspondiendo directamente con los
+métodos HTTP implementados en el servidor.
+
+Figura 1. DFD de Contexto (Nivel 0). Modela el sistema completo como el Proceso Único 0 (Sistema de monitoreo
+de incidencias). La entidad externa Agente de monitoreo (en las terminales de la MiPyME) envía el flujo reporte de
+incidencia (tipo, descripción), y la entidad externa Administrador / Soporte TI envía consultas y cambios de estado,
+recibiendo como salida listados, contadores y estado. De manera complementaria, cuando se supera un umbral, el
+sistema emite alertas salientes hacia el servicio externo de Telegram.
+
+Figura 2. DFD de Nivel 1. Descompone el Proceso 0 en sus tres procesos principales: Proceso 1 (Registrar
+incidencias — POST), Proceso 2 (Consultar incidencias — GET con filtros y auditoría) y Proceso 3
+(Actualizar y cerrar casos — PATCH / PUT / DELETE), todos sincronizados sobre el almacén persistente D1
+(incidencias.json) mediante exclusión mutua.
+
+La Tabla 2 verifica la consistencia entre ambos niveles del DFD, los endpoints REST del servidor y
+las ramas de Git asignadas a cada integrante.
+Universidad Veracruzana · Programación en Red (NRC 19141) · Práctica 11 (Parte B)
+
+Page 7 of 9
+
+Tabla 2
+Balanceo de flujos entre el DFD de Nivel 1, las rutas HTTP y el almacenamiento en disco
+Proceso (DFD Nivel 1)
+
+Entidad Externa
+
+1. Registrar
+incidencias
+
+Agente de monitoreo (y
+API Telegram en
+umbral)
+
+Flujo de Datos (HTTPS /
+JSON)
+
+Almacén y Funciones
+Asociadas
+
+Entrada: POST
+
+Escritura protegida con Lock
+en D1 (incidencias.json)
+y bitácora
+
+/incidencias JSON.
+Salida: 201 Created (+
+
+alerta Telegram si supera
+umbral).
+
+alertas_telegram.json
+
+(F1, F2, F3, F4, F6).
+
+2. Consultar
+incidencias
+
+Administrador / Soporte
+TI MiPyME
+
+Entrada: GET
+
+Lectura sincronizada desde D1
+(incidencias.json) y
+bitácoras de sesión/alertas (F5,
+F8, F9).
+
+3. Actualizar y cerrar
+casos
+
+Administrador / Soporte
+TI MiPyME
+
+Entrada: PATCH / PUT /
+
+Modificación o eliminación
+protegida con Lock en D1
+(incidencias.json) (F2,
+F7, F8).
+
+/incidencias?
+tipo=...&estado=...,
+/logs, /contadores,
+/alertas.
+Salida: Listas y detalle 200
+OK JSON.
+DELETE
+/incidencias/<id>.
+
+Salida: Recurso actualizado
+200 o confirmación 204.
+
+5. Matriz de Defensa Técnica ante el Jurado Evaluador
+La Tabla 3 resume las respuestas técnicas clave para respaldar el diseño durante la evaluación oral
+y la demostración en vivo.
+Tabla 3
+Sustento de decisiones de ingeniería frente a preguntas del jurado
+Pregunta del Jurado
+
+Respuesta Técnica Basada en el Sistema Implementado
+
+1. ¿Por qué usar http.server y
+JSON en lugar de un framework
+pesado o la nube?
+
+Porque permite programar el protocolo HTTP y el manejo de sockets TLS
+directamente con la biblioteca estándar vista en el curso, garantizando un
+despliegue On-Premise ligero, sin costos mensuales de nube y sin exponer
+información sensible de la MiPyME a Internet.
+
+2. ¿Cómo garantizan que 3 clientes
+simultáneos no corrompan
+incidencias.json?
+
+Se utiliza ThreadingHTTPServer para atender cada conexión en un hilo
+distinto y un candado threading.Lock() que serializa las escrituras en
+disco y la actualización de siguiente_id y contadores.
+
+3. ¿Qué pasa si un cliente se
+desconecta a mitad de una petición
+o se cae Internet al alertar a
+Telegram?
+
+El servidor captura excepciones de socket (BrokenPipeError,
+ConnectionResetError) sin caerse ni dejar el JSON a medias. Si no hay
+Internet al disparar un umbral, requests.post falla por timeout=5, se
+captura RequestException y se registra FALLIDO_SIN_INTERNET en
+alertas_telegram.json.
+
+Universidad Veracruzana · Programación en Red (NRC 19141) · Práctica 11 (Parte B)
+
+Page 8 of 9
+
+Pregunta del Jurado
+
+Respuesta Técnica Basada en el Sistema Implementado
+
+4. ¿Cómo evitan interceptación en
+la LAN y spam de notificaciones?
+
+Todo el tráfico en la LAN viaja cifrado con TLS/HTTPS (puerto 8443,
+certificado X.509). El Bot de Telegram solo se dispara bajo reglas de umbral
+(tipo crítico o ≥ 3 incidencias abiertas), evitando saturar al encargado.
+
+6. Vinculación Funcionalidad — Evidencia Científica (Parte A)
+En la Tabla 4 se conecta cada bloque de funcionalidades desarrollado en las tres ramas de Git con
+los artículos científicos analizados en la Parte A.
+Tabla 4
+Sustento científico de las funcionalidades del sistema con base en la Parte A
+Autor y Año (Parte A)
+
+Aporte Relevante del Artículo Científico
+
+Funcionalidades Sustentadas
+
+Chidukwani et al. (2022)
+IEEE Access
+
+Demuestra que más del 60 % de las
+MiPyMEs carecen de bitácora formal de
+incidentes por el alto costo y complejidad
+de los SIEM comerciales.
+
+F4, F5 y F6 (Rama de Rodrigo García):
+Registro estructurado de incidencias,
+consultas filtradas y agente ligero de
+puertos en Python.
+
+Tam et al. (2021)
+Computers & Security
+
+Evidencia que los reportes informales
+impiden dar seguimiento a fallos y que el
+tráfico sin cifrar en redes de PyMEs expone
+vulnerabilidades al sniffing.
+
+F1, F3 y F7 (Ramas de Eddi Michael y
+Fernanda): Túnel cifrado TLS/HTTPS con
+OpenSSL, control de estados con
+PATCH/PUT y alertas oportunas por
+umbral en Telegram.
+
+Alvarez y Benitez (2024)
+IEEE LATINCOM
+
+Comprueba que los recolectores REST en
+hardware modesto requieren concurrencia
+controlada y tolerancia a fallos ante
+reportes simultáneos.
+
+F2, F8 y F9 (Ramas de Eddi Michael y
+Fernanda): Persistencia protegida con
+threading.Lock en
+incidencias.json, endpoints de
+auditoría y pruebas de concurrencia/fallos.
+
+7. Conclusión de Viabilidad y Pertinencia (134 palabras)
+La solución propuesta es técnica y económicamente viable porque atiende una necesidad real de las
+Micro y Pequeñas Empresas: contar con un monitoreo ligero y una bitácora centralizada de
+incidencias sin pagar licencias SIEM ni infraestructura en la nube. Al construirse directamente con
+las herramientas vistas en el curso —servidor HTTP multihilo en Python, sincronización con
+candados, persistencia en archivos JSON, sockets TCP y cifrado TLS/HTTPS con OpenSSL— el
+sistema es completamente auditable, ligero y fácil de desplegar en red local (On-Premise).
+Adicionalmente, la integración de un Bot de Telegram basado en umbrales con bitácora local
+tolerante a cortes de Internet aporta alerta temprana sin generar saturación. En conjunto, el diseño
+garantiza participación equitativa por ramas de Git y cumple con rigor los criterios de evaluación.
+
+Universidad Veracruzana · Programación en Red (NRC 19141) · Práctica 11 (Parte B)
+
+Page 9 of 9
+
+

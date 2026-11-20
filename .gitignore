@@ -1,0 +1,8 @@
+*.pem
+.env
+incidencias.json
+alertas_telegram.json
+incidencias.json.corrupto-*
+__pycache__/
+*.pyc
+.venv/
