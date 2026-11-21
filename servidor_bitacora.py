@@ -11,9 +11,8 @@ from http.server import ThreadingHTTPServer
 
 import config
 from almacen import AlmacenBitacora
-from bot_comandos import BotComandos
 from manejador_http import ManejadorBitacora
-from notificador_telegram import NotificadorTelegram
+from notificador_telegram import BotComandos, NotificadorTelegram
 
 
 def crear_contexto_tls(ruta_certificado, ruta_llave):
@@ -28,10 +27,19 @@ class ServidorBitacoraHTTPS(ThreadingHTTPServer):
     allow_reuse_address = True
     timeout_handshake = 10
 
-    def __init__(self, direccion, almacen, notificador, contexto_tls, manejador=ManejadorBitacora):
+    def __init__(
+        self,
+        direccion,
+        almacen,
+        notificador,
+        contexto_tls,
+        manejador=ManejadorBitacora,
+        api_keys=None,
+    ):
         self.almacen = almacen
         self.notificador = notificador
         self.contexto_tls = contexto_tls
+        self.api_keys = set(api_keys or ())
         super().__init__(direccion, manejador)
 
     def process_request_thread(self, request, client_address):
@@ -77,7 +85,13 @@ def main():
         timeout=config.TELEGRAM_TIMEOUT,
     )
     try:
-        servidor = ServidorBitacoraHTTPS((config.HOST, config.PUERTO), almacen, notificador, contexto)
+        servidor = ServidorBitacoraHTTPS(
+            (config.HOST, config.PUERTO),
+            almacen,
+            notificador,
+            contexto,
+            api_keys=config.API_KEYS,
+        )
     except OSError as exc:
         print("No se pudo abrir %s:%d (%s)" % (config.HOST, config.PUERTO, exc), file=sys.stderr)
         return 1
@@ -87,7 +101,7 @@ def main():
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID and config.BOT_COMANDOS:
         bot = BotComandos(
             config.TELEGRAM_BOT_TOKEN,
-            config.TELEGRAM_ADMIN_IDS,
+            config.ADMIN_CHAT_IDS,
             almacen,
             info_servidor={"puerto": config.PUERTO, "tls": "HTTPS/TLS, minimo TLS 1.2"},
         )

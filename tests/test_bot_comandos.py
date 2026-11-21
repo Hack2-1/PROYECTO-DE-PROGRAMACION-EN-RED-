@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests  # noqa: E402
 
 from almacen import AlmacenBitacora  # noqa: E402
-from bot_comandos import BotComandos, ErrorTelegram, resolver_fecha_dia  # noqa: E402
+from notificador_telegram import BotComandos, ErrorTelegram, resolver_fecha_dia  # noqa: E402
 
 
 def actualizacion(update_id, chat_id, texto):
@@ -68,8 +68,8 @@ class PruebasBotComandos(unittest.TestCase):
         self.assertIn("/estado", self.bot.procesar_comando("/Start@mi_bot"))
         self.assertIn("no reconocido", self.bot.procesar_comando("/borrar"))
 
-    @mock.patch("bot_comandos.requests.post")
-    @mock.patch("bot_comandos.requests.get")
+    @mock.patch("notificador_telegram.requests.post")
+    @mock.patch("notificador_telegram.requests.get")
     def test_autorizado_recibe_respuesta_y_avanza_offset(self, get, post):
         get.return_value.status_code = 200
         get.return_value.json.return_value = {"result": [actualizacion(10, 111, "/estado")]}
@@ -79,8 +79,8 @@ class PruebasBotComandos(unittest.TestCase):
         self.assertEqual(enviado["chat_id"], "111")
         self.assertIn("ACTIVO", enviado["text"])
 
-    @mock.patch("bot_comandos.requests.post")
-    @mock.patch("bot_comandos.requests.get")
+    @mock.patch("notificador_telegram.requests.post")
+    @mock.patch("notificador_telegram.requests.get")
     def test_no_autorizado_se_ignora_y_se_audita(self, get, post):
         get.return_value.status_code = 200
         get.return_value.json.return_value = {"result": [actualizacion(5, 999, "/estado")]}
@@ -90,28 +90,28 @@ class PruebasBotComandos(unittest.TestCase):
         self.assertEqual(len(eventos), 1)
         self.assertEqual(eventos[0]["cliente"], "999")
 
-    @mock.patch("bot_comandos.requests.post")
-    @mock.patch("bot_comandos.requests.get")
+    @mock.patch("notificador_telegram.requests.post")
+    @mock.patch("notificador_telegram.requests.get")
     def test_texto_sin_comando_sugiere_ayuda(self, get, post):
         get.return_value.status_code = 200
         get.return_value.json.return_value = {"result": [actualizacion(1, 111, "hola")]}
         self.bot.ciclo_una_vez()
         self.assertIn("/ayuda", post.call_args.kwargs["json"]["text"])
 
-    @mock.patch("bot_comandos.requests.get")
+    @mock.patch("notificador_telegram.requests.get")
     def test_error_de_telegram_levanta_error_controlado(self, get):
         get.return_value.status_code = 409
         with self.assertRaises(ErrorTelegram):
             self.bot.ciclo_una_vez()
 
-    @mock.patch("bot_comandos.requests.get")
+    @mock.patch("notificador_telegram.requests.get")
     def test_descartar_pendientes_ignora_mensajes_viejos(self, get):
         get.return_value.status_code = 200
         get.return_value.json.return_value = {"result": [actualizacion(40, 111, "/estado")]}
         self.bot._descartar_pendientes()
         self.assertEqual(self.bot._offset, 41)
 
-    @mock.patch("bot_comandos.requests.post", side_effect=requests.ConnectionError())
+    @mock.patch("notificador_telegram.requests.post", side_effect=requests.ConnectionError())
     def test_fallo_al_responder_no_lanza(self, _post):
         self.bot._procesar_actualizacion(actualizacion(1, 111, "/estado"))
 

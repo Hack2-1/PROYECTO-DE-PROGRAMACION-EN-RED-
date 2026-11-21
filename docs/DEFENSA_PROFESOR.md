@@ -95,7 +95,7 @@ La comunicación se divide en dos flujos independientes, ambos utilizando **úni
    - Si supera el umbral, el servidor ejecuta `requests.post("https://api.telegram.org/bot<TOKEN>/sendMessage", ..., timeout=5)` dentro de un bloque `try/except`.
    - Si no hay Internet, registra `FALLIDO_SIN_INTERNET` (`codigo_http = 503`) en `alertas_telegram` (SQLite y JSON) y el monitoreo local continúa operando sin interrupciones.
 
-2. **Consultas interactivas del administrador (`bot_comandos.py` — mejora F3):**
+2. **Consultas interactivas del administrador (`notificador_telegram.py` — `BotComandos`, parte de F3):**
    - Un hilo secundario (`daemon=True`) ejecuta **Long Polling** sobre `GET https://api.telegram.org/bot<TOKEN>/getUpdates?timeout=25`.
    - Al arrancar, descarta mensajes viejos acumulados mientras el servidor estaba apagado (`offset = -1`).
    - Cuando el administrador escribe comandos como `/estado`, `/incidencias`, `/dia miercoles`, `/fecha 2026-11-18`, `/contadores`, `/alertas` o `/ayuda`:
@@ -111,12 +111,15 @@ La comunicación se divide en dos flujos independientes, ambos utilizando **úni
 El acceso está segregado en tres niveles:
 
 1. **Acceso al Chatbot de Telegram (solo administrador autorizado):**
-   - El bot valida estrictamente que `chat.id` pertenezca a `TELEGRAM_ADMIN_IDS` (que incluye `TELEGRAM_CHAT_ID`, configurado en `.env` únicamente en el servidor central de Eddi).
+   - El bot valida estrictamente que `chat.id` pertenezca a `ADMIN_CHAT_IDS` (que incluye `TELEGRAM_CHAT_ID`, configurado en `.env` únicamente en el servidor central de Eddi).
    - Cualquier mensaje de otro usuario de Telegram es **ignorado silenciosamente** y queda registrado en `/logs` con el evento `BOT_NO_AUTORIZADO` y el ID del remitente.
 
-2. **Acceso al Servidor Central, Llave Privada y Base de Datos (solo Eddi Michael):**
-   - El archivo `.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`), la llave privada TLS (`llave.pem`), la base SQLite (`bitacora.db`) y los archivos JSON residen únicamente en el nodo servidor de Eddi y están excluidos del repositorio en `.gitignore`.
+2. **Autenticación de clientes en la LAN (`X-API-Key`):**
+   - Cuando `API_KEYS` está configurado en `.env`, los clientes (`agente_puertos.py` y `cliente_admin.py`) deben presentar la cabecera `X-API-Key`; de lo contrario, `_verificar_api_key()` rechaza con `401 Unauthorized` y registra `API_KEY_RECHAZADA`.
+
+3. **Acceso al Servidor Central, Llave Privada y Base de Datos (solo Eddi Michael):**
+   - El archivo `.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_CHAT_IDS`, `API_KEYS`), la llave privada TLS (`llave.pem`), la base SQLite (`bitacora.db`) y los archivos JSON residen únicamente en el nodo servidor de Eddi y están excluidos del repositorio en `.gitignore`.
    - Sus compañeros (Rodrigo y Fernanda) trabajan únicamente en sus zonas asignadas (`manejador_http.py`, `agente_puertos.py`, `cliente_admin.py`) sin acceso al token ni a `llave.pem`, verificado antes de cada integración mediante `scripts/verificar_zonas.py`.
 
-3. **Acceso de los Nodos en la LAN (Agentes y Cliente Admin):**
+4. **Acceso de los Nodos en la LAN (Agentes y Cliente Admin):**
    - Las terminales solo reciben el certificado público `certificado.pem` para establecer el canal cifrado TLS (`verify="certificado.pem"`) contra la IP del servidor en el puerto `8443`.

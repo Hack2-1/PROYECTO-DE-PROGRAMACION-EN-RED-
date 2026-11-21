@@ -13,6 +13,7 @@ import requests  # noqa: E402
 
 from almacen import AlmacenBitacora  # noqa: E402
 from generar_certificados import generar  # noqa: E402
+from manejador_http import ManejadorBitacora  # noqa: E402
 from notificador_telegram import NotificadorTelegram  # noqa: E402
 from servidor_bitacora import ServidorBitacoraHTTPS, crear_contexto_tls  # noqa: E402
 
@@ -90,6 +91,46 @@ class PruebasServidorTLS(unittest.TestCase):
         s.close()
         r = requests.get(self.base + "/salud", verify=self.cert, timeout=10)
         self.assertEqual(r.status_code, 200)
+
+    def test_verificar_api_key_401_y_200(self):
+        class ManejadorProtegido(ManejadorBitacora):
+            def do_POST(self):
+                if not self._verificar_api_key():
+                    return
+                self._enviar_json(200, {"autorizado": True})
+
+        almacen_auth = AlmacenBitacora(
+            os.path.join(self.dir.name, "i_auth.json"),
+            os.path.join(self.dir.name, "a_auth.json"),
+        )
+        srv = ServidorBitacoraHTTPS(
+            ("127.0.0.1", 0),
+            almacen_auth,
+            NotificadorTelegram("", "", almacen_auth),
+            crear_contexto_tls(self.cert, self.llave),
+            manejador=ManejadorProtegido,
+            api_keys={"clave-secreta-01"},
+        )
+        hilo = threading.Thread(target=srv.serve_forever, daemon=True)
+        hilo.start()
+        try:
+            url = "https://127.0.0.1:%d/incidencias" % srv.server_address[1]
+            r_sin = requests.post(url, json={}, verify=self.cert, timeout=10)
+            self.assertEqual(r_sin.status_code, 401)
+            r_mal = requests.post(
+                url, json={}, headers={"X-API-Key": "incorrecta"}, verify=self.cert, timeout=10
+            )
+            self.assertEqual(r_mal.status_code, 401)
+            r_ok = requests.post(
+                url, json={}, headers={"X-API-Key": "clave-secreta-01"}, verify=self.cert, timeout=10
+            )
+            self.assertEqual(r_ok.status_code, 200)
+            self.assertTrue(r_ok.json()["autorizado"])
+            rechazos = [l for l in almacen_auth.obtener_logs() if l["tipo"] == "API_KEY_RECHAZADA"]
+            self.assertEqual(len(rechazos), 2)
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
 
 if __name__ == "__main__":

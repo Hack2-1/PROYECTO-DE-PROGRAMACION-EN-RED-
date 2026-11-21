@@ -15,7 +15,6 @@ ARCHIVOS_PROTEGIDOS_EDDI = {
     "servidor_bitacora.py",
     "almacen.py",
     "notificador_telegram.py",
-    "bot_comandos.py",
     "config.py",
     "scripts/generar_certificados.py",
 }

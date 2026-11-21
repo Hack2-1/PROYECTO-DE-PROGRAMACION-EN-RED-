@@ -110,6 +110,24 @@ class ManejadorBitacora(BaseHTTPRequestHandler):
         """Atajo para el par (codigo, mensaje) que devuelven los helpers."""
         self._enviar_json(error[0], {"error": error[1]})
 
+    def _verificar_api_key(self):
+        """Valida la cabecera X-API-Key cuando config.API_KEYS tiene claves activas."""
+        api_keys = getattr(self.server, "api_keys", None)
+        if not api_keys:
+            return True
+        clave = (self.headers.get("X-API-Key") or "").strip()
+        if clave in api_keys:
+            return True
+        almacen = self._obtener_almacen()
+        if almacen is not None:
+            almacen.registrar_evento(
+                "API_KEY_RECHAZADA",
+                self.client_address[0] if self.client_address else "-",
+                "Peticion sin X-API-Key valida",
+            )
+        self._enviar_json(401, {"error": "X-API-Key invalida o ausente"})
+        return False
+
     # ------------------------------------------------------------------
     # Tolerancia a fallos y errores homogeneos en JSON
     # ------------------------------------------------------------------

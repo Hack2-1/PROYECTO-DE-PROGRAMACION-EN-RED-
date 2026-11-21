@@ -59,7 +59,7 @@ Valores posibles de `estado_envio`: `"ENVIADO"`, `"ERROR_API"`, `"FALLIDO_SIN_IN
 | Método | Ruta | Responsable | Entrada JSON / Query | Respuestas |
 | :--- | :--- | :--- | :--- | :--- |
 | `GET` | `/salud` | Base (`main`) | — | `200 OK` estado del canal TLS |
-| `POST` | `/incidencias` | Rodrigo (F4) | `{"tipo": str, "descripcion": str, "estado"?: str}` | `201 Created` (incidencia creada) / `400 Bad Request` |
+| `POST` | `/incidencias` | Rodrigo (F4) | `{"tipo": str, "descripcion": str, "estado"?: str}` + `X-API-Key` (si `API_KEYS` activo) | `201 Created` / `400 Bad Request` / `401 Unauthorized` |
 | `GET` | `/incidencias` | Rodrigo (F5) | `?tipo=...&estado=...` (opcionales) | `200 OK` lista JSON filtrada |
 | `GET` | `/incidencias/<id>` | Rodrigo (F5) | `<id>` entero positivo | `200 OK` objeto / `400` ID no entero / `404` no existe |
 | `PATCH` | `/incidencias/<id>` | Fernanda (F7) | `{"estado": "abierta" \| "en_proceso" \| "resuelta"}` | `200 OK` / `400` estado inválido / `404` |
@@ -96,12 +96,14 @@ Además, el registro en `/logs` y `/contadores` ocurre **automáticamente** cada
 - `almacen.obtener_contadores() -> dict`
 - `almacen.cargar_alertas() -> list[dict]`
 
-### 3.2 Método de `notificador` (`NotificadorTelegram`)
+### 3.2 Módulo F3 (`notificador_telegram.py`: `NotificadorTelegram` + `BotComandos`)
 - `notificador.evaluar_umbral_telegram(incidencia_nueva, lista_incidencias) -> dict`  
   Debe llamarse **después** de `almacen.crear_incidencia(...)` (fuera del candado).  
   Nunca lanza excepciones hacia el hilo HTTP; ante fallos de red registra `FALLIDO_SIN_INTERNET` en `alertas_telegram.json`.
+- `BotComandos` (en `notificador_telegram.py`): hilo en segundo plano con long polling (`getUpdates`), lista blanca `ADMIN_CHAT_IDS` y consulta indexada en SQLite (`/dia`, `/fecha`, `/estado`, `/incidencias`, `/contadores`, `/alertas`).
 
 ### 3.3 Utilidades disponibles en `ManejadorBitacora`
+- `self._verificar_api_key()` (si `API_KEYS` está configurado en `.env`, valida la cabecera `X-API-Key`; si falla, registra `API_KEY_RECHAZADA`, responde `401` y devuelve `False`)
 - `ruta, query = self._ruta_y_query()`
 - `datos, error = self._leer_json_cuerpo()` (si `error` no es `None`, responde `self._enviar_json(error[0], {"error": error[1]})`)
 - `incidencia_id, error_id = self._extraer_id_incidencia(ruta)` (si `error_id`, responde `400`)
