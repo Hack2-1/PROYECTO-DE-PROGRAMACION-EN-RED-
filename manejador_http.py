@@ -214,18 +214,110 @@ class ManejadorBitacora(BaseHTTPRequestHandler):
     # ==================================================================
     # ZONA FERNANDA (F7 y F8) - rama feature/gestion-auditoria-cliente
     # ==================================================================
+
     def do_PATCH(self):
-        # F7: PATCH /incidencias/<id> (cambio de estado validado).
-        self._no_implementado("F7", "Fernanda")
+        # F7: Cambiar el estado de una incidencia.
+        if not self._verificar_api_key():
+            return
+
+        ruta, _ = self._ruta_y_query()
+        incidencia_id, error_id = self._extraer_id_incidencia(ruta)
+
+        if error_id is not None:
+            self._enviar_error_json(error_id)
+            return
+
+        datos, error = self._leer_json_cuerpo()
+        if error is not None:
+            self._enviar_error_json(error)
+            return
+
+        almacen = self._obtener_almacen()
+        try:
+            actualizada = almacen.actualizar_estado(
+                incidencia_id, datos.get("estado")
+            )
+        except ValueError as exc:
+            self._enviar_json(400, {"error": str(exc)})
+            return
+
+        if actualizada is None:
+            self._enviar_json(404, {"error": "Incidencia no encontrada"})
+            return
+
+        self._enviar_json(200, actualizada)
 
     def do_PUT(self):
-        # F7: PUT /incidencias/<id> (reemplazo completo, estado=abierta).
-        self._no_implementado("F7", "Fernanda")
+        # F7: Reemplazar completamente una incidencia.
+        if not self._verificar_api_key():
+            return
+
+        ruta, _ = self._ruta_y_query()
+        incidencia_id, error_id = self._extraer_id_incidencia(ruta)
+
+        if error_id is not None:
+            self._enviar_error_json(error_id)
+            return
+
+        datos, error = self._leer_json_cuerpo()
+        if error is not None:
+            self._enviar_error_json(error)
+            return
+
+        almacen = self._obtener_almacen()
+        try:
+            reemplazada = almacen.reemplazar_incidencia(
+                incidencia_id,
+                datos.get("tipo"),
+                datos.get("descripcion")
+            )
+        except ValueError as exc:
+            self._enviar_json(400, {"error": str(exc)})
+            return
+
+        if reemplazada is None:
+            self._enviar_json(404, {"error": "Incidencia no encontrada"})
+            return
+
+        self._enviar_json(200, reemplazada)
+
 
     def do_DELETE(self):
-        # F8: DELETE /incidencias/<id> (204 No Content).
-        self._no_implementado("F8", "Fernanda")
+        # F8: Eliminar una incidencia por su ID.
+        if not self._verificar_api_key():
+            return
+
+        ruta, _ = self._ruta_y_query()
+        incidencia_id, error_id = self._extraer_id_incidencia(ruta)
+
+        if error_id is not None:
+            self._enviar_error_json(error_id)
+            return
+
+        eliminada = self._obtener_almacen().eliminar_incidencia(incidencia_id)
+
+        if not eliminada:
+            self._enviar_json(404, {"error": "Incidencia no encontrada"})
+            return
+
+        self._enviar_sin_contenido(204)
 
     def manejar_get_auditoria(self):
-        # F8: GET /logs, /contadores y /alertas.
-        self._no_implementado("F8", "Fernanda")
+        # F8: Consultar registros, contadores y alertas.
+        if not self._verificar_api_key():
+            return
+
+        ruta, _ = self._ruta_y_query()
+        almacen = self._obtener_almacen()
+
+        if ruta == "/logs":
+            self._enviar_json(200, almacen.obtener_logs())
+
+        elif ruta == "/contadores":
+            self._enviar_json(200, almacen.obtener_contadores())
+
+        elif ruta == "/alertas":
+            self._enviar_json(200, almacen.cargar_alertas())
+
+        else:
+            self._enviar_json(404, {"error": "Ruta no encontrada"})
