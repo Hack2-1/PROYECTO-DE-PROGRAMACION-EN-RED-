@@ -200,17 +200,68 @@ class ManejadorBitacora(BaseHTTPRequestHandler):
             501, {"error": "No implementado", "funcion": funcion, "responsable": responsable}
         )
 
-    # ==================================================================
+   # ==================================================================
     # ZONA RODRIGO GARCIA (F4 y F5) - rama feature/registro-consultas-agente
     # ==================================================================
     def do_POST(self):
         # F4: POST /incidencias (validar, almacen.crear_incidencia, notificador).
-        self._no_implementado("F4", "Rodrigo Garcia")
+        ruta, _ = self._ruta_y_query()
+        if ruta != "/incidencias":
+            self._enviar_json(404, {"error": "Ruta no encontrada"})
+            return
+
+        if not self._verificar_api_key():
+            return
+
+        datos, error = self._leer_json_cuerpo()
+        if error is not None:
+            self._enviar_error_json(error)
+            return
+
+        almacen = self._obtener_almacen()
+        try:
+            incidencia, lista = almacen.crear_incidencia(
+                datos.get("tipo"),
+                datos.get("descripcion"),
+                datos.get("estado", "abierta"),
+                origen=self.client_address[0] if self.client_address else None,
+            )
+        except ValueError as exc:
+            self._enviar_json(400, {"error": str(exc)})
+            return
+
+        notificador = self._obtener_notificador()
+        if notificador is not None:
+            notificador.evaluar_umbral_telegram(incidencia, lista)
+
+        self._enviar_json(201, incidencia)
 
     def manejar_get_incidencias(self):
         # F5: GET /incidencias (?tipo=&estado=) y GET /incidencias/<id>.
-        self._no_implementado("F5", "Rodrigo Garcia")
+        if not self._verificar_api_key():
+            return
 
+        ruta, query = self._ruta_y_query()
+        almacen = self._obtener_almacen()
+
+        if ruta == "/incidencias":
+            tipo = query.get("tipo", [None])[0]
+            estado = query.get("estado", [None])[0]
+            lista = almacen.listar_incidencias(tipo=tipo, estado=estado)
+            self._enviar_json(200, lista)
+            return
+
+        incidencia_id, error_id = self._extraer_id_incidencia(ruta)
+        if error_id is not None:
+            self._enviar_error_json(error_id)
+            return
+
+        incidencia = almacen.obtener_incidencia(incidencia_id)
+        if incidencia is None:
+            self._enviar_json(404, {"error": "Incidencia no encontrada"})
+            return
+
+        self._enviar_json(200, incidencia)
     # ==================================================================
     # ZONA FERNANDA (F7 y F8) - rama feature/gestion-auditoria-cliente
     # ==================================================================
