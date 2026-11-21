@@ -1,11 +1,13 @@
-"""F2 - Persistencia concurrente en JSON con candado (Eddi Michael).
+"""F2 - Persistencia concurrente en SQLite indexado + JSON con candado (Eddi Michael).
 
-Almacen D1 (incidencias.json), bitacora de Telegram (alertas_telegram.json)
-y auditoria en memoria (logs y contadores HTTP).
+Motor principal indexado SQLite (bitacora.db) con espejo JSON compatible
+(incidencias.json y alertas_telegram.json) y auditoria en memoria.
 """
 
+from contextlib import closing
 import json
 import os
+import sqlite3
 import threading
 import time
 from collections import deque
@@ -17,6 +19,11 @@ MAX_LOGS = 1000
 
 def _ahora():
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _fecha_de_hora(hora):
+    texto = str(hora or "").strip()
+    return texto[:10] if len(texto) >= 10 else ""
 
 
 def _familia(codigo):
@@ -44,18 +51,153 @@ def _validar_estado(estado):
 
 
 class AlmacenBitacora:
-    def __init__(self, ruta_incidencias="incidencias.json", ruta_alertas="alertas_telegram.json"):
+    def __init__(
+        self,
+        ruta_incidencias="incidencias.json",
+        ruta_alertas="alertas_telegram.json",
+        ruta_db=None,
+    ):
         self.ruta_incidencias = ruta_incidencias
         self.ruta_alertas = ruta_alertas
-        self._lock = threading.Lock()          # incidencias.json
-        self._lock_alertas = threading.Lock()  # alertas_telegram.json
-        self._lock_auditoria = threading.Lock()  # logs y contadores
+        if ruta_db is None:
+            directorio = os.path.dirname(os.path.abspath(ruta_incidencias))
+            self.ruta_db = os.path.join(directorio, "bitacora.db")
+        else:
+            self.ruta_db = ruta_db
+        self._lock = threading.Lock()           # incidencias (JSON + SQLite)
+        self._lock_alertas = threading.Lock()   # alertas_telegram (JSON + SQLite)
+        self._lock_auditoria = threading.Lock() # logs y contadores en memoria
+        self._lock_db = threading.Lock()        # serializa commits SQLite entre tablas
         self._incidencias = []
         self._siguiente_id = 1
         self._logs = deque(maxlen=MAX_LOGS)
         self._id_log = 0
         self._contadores = {"total": 0, "por_metodo": {}, "por_familia": {}, "por_metodo_familia": {}}
+        self._inicializar_db()
         self.cargar()
+        self._sincronizar_alertas_inicial()
+
+    # ------------------------------------------------------------------
+    # SQLite indexado (bitacora.db)
+    # ------------------------------------------------------------------
+    def _conectar_db(self):
+        conn = sqlite3.connect(self.ruta_db, timeout=15.0)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _inicializar_db(self):
+        directorio = os.path.dirname(os.path.abspath(self.ruta_db))
+        if directorio:
+            os.makedirs(directorio, exist_ok=True)
+        with self._lock_db, closing(self._conectar_db()) as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS incidencias (
+                    id INTEGER PRIMARY KEY,
+                    tipo TEXT NOT NULL,
+                    descripcion TEXT NOT NULL,
+                    estado TEXT NOT NULL,
+                    hora TEXT NOT NULL,
+                    fecha TEXT NOT NULL,
+                    origen TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_incidencias_fecha ON incidencias(fecha);
+                CREATE INDEX IF NOT EXISTS idx_incidencias_estado ON incidencias(estado);
+                CREATE INDEX IF NOT EXISTS idx_incidencias_tipo ON incidencias(tipo);
+
+                CREATE TABLE IF NOT EXISTS alertas_telegram (
+                    id_alerta INTEGER PRIMARY KEY,
+                    hora TEXT NOT NULL,
+                    fecha TEXT NOT NULL,
+                    incidencia_id INTEGER,
+                    tipo_incidencia TEXT,
+                    motivo TEXT,
+                    estado_envio TEXT,
+                    codigo_http INTEGER,
+                    detalle TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_alertas_fecha ON alertas_telegram(fecha);
+                """
+            )
+            conn.commit()
+
+    def _sincronizar_incidencias_db(self):
+        filas = [
+            (
+                i["id"],
+                i.get("tipo", ""),
+                i.get("descripcion", ""),
+                i.get("estado", "abierta"),
+                i.get("hora", ""),
+                _fecha_de_hora(i.get("hora", "")),
+                i.get("origen"),
+            )
+            for i in self._incidencias
+        ]
+        with self._lock_db, closing(self._conectar_db()) as conn:
+            conn.execute("DELETE FROM incidencias")
+            conn.executemany(
+                """
+                INSERT INTO incidencias (id, tipo, descripcion, estado, hora, fecha, origen)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                filas,
+            )
+            conn.commit()
+
+    def _cargar_incidencias_desde_db(self):
+        with self._lock_db, closing(self._conectar_db()) as conn:
+            filas = conn.execute(
+                "SELECT id, tipo, descripcion, estado, hora, origen FROM incidencias ORDER BY id ASC"
+            ).fetchall()
+        resultado = []
+        for fila in filas:
+            item = {
+                "id": fila["id"],
+                "tipo": fila["tipo"],
+                "descripcion": fila["descripcion"],
+                "estado": fila["estado"],
+                "hora": fila["hora"],
+            }
+            if fila["origen"]:
+                item["origen"] = fila["origen"]
+            resultado.append(item)
+        return resultado
+
+    def _sincronizar_alertas_inicial(self):
+        with self._lock_alertas:
+            datos = self._leer_json(self.ruta_alertas)
+            if not isinstance(datos, list) or not datos:
+                return
+            filas = [
+                (
+                    a.get("id_alerta"),
+                    a.get("hora", ""),
+                    _fecha_de_hora(a.get("hora", "")),
+                    a.get("incidencia_id"),
+                    a.get("tipo_incidencia"),
+                    a.get("motivo"),
+                    a.get("estado_envio"),
+                    a.get("codigo_http"),
+                    a.get("detalle"),
+                )
+                for a in datos
+                if isinstance(a, dict) and isinstance(a.get("id_alerta"), int)
+            ]
+            if not filas:
+                return
+            with self._lock_db, closing(self._conectar_db()) as conn:
+                conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO alertas_telegram (
+                        id_alerta, hora, fecha, incidencia_id, tipo_incidencia,
+                        motivo, estado_envio, codigo_http, detalle
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    filas,
+                )
+                conn.commit()
 
     # ------------------------------------------------------------------
     # Persistencia
@@ -86,8 +228,9 @@ class AlmacenBitacora:
             return None
 
     def cargar(self):
-        """Carga incidencias.json (objeto con siguiente_id o lista directa)."""
+        """Carga incidencias desde JSON (o SQLite si aun no hay JSON) y sincroniza."""
         with self._lock:
+            archivo_existia = os.path.exists(self.ruta_incidencias)
             datos = self._leer_json(self.ruta_incidencias)
             declarado = 1
             if isinstance(datos, dict):
@@ -95,6 +238,8 @@ class AlmacenBitacora:
                 declarado = datos.get("siguiente_id", 1)
             elif isinstance(datos, list):
                 lista = datos
+            elif not archivo_existia:
+                lista = self._cargar_incidencias_desde_db()
             else:
                 lista = []
             lista = [i for i in lista if isinstance(i, dict) and isinstance(i.get("id"), int)]
@@ -103,12 +248,22 @@ class AlmacenBitacora:
                 declarado = 1
             self._incidencias = lista
             self._siguiente_id = max(declarado, maximo + 1)
+            self._sincronizar_incidencias_db()
+            if not archivo_existia and lista:
+                self._escribir_atomico(
+                    self.ruta_incidencias,
+                    {"siguiente_id": self._siguiente_id, "incidencias": self._incidencias},
+                )
 
-    def _guardar_sin_lock(self):
+    def _guardar_json_sin_lock(self):
         self._escribir_atomico(
             self.ruta_incidencias,
             {"siguiente_id": self._siguiente_id, "incidencias": self._incidencias},
         )
+
+    def _guardar_sin_lock(self):
+        self._sincronizar_incidencias_db()
+        self._guardar_json_sin_lock()
 
     def guardar(self):
         with self._lock:
@@ -122,18 +277,36 @@ class AlmacenBitacora:
         descripcion = _texto_obligatorio(descripcion, "descripcion")
         estado = _validar_estado(estado)
         with self._lock:
+            hora = _ahora()
             incidencia = {
                 "id": self._siguiente_id,
                 "tipo": tipo,
                 "descripcion": descripcion,
                 "estado": estado,
-                "hora": _ahora(),
+                "hora": hora,
             }
             if origen:
                 incidencia["origen"] = str(origen)
+            with self._lock_db, closing(self._conectar_db()) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO incidencias (id, tipo, descripcion, estado, hora, fecha, origen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        incidencia["id"],
+                        tipo,
+                        descripcion,
+                        estado,
+                        hora,
+                        _fecha_de_hora(hora),
+                        incidencia.get("origen"),
+                    ),
+                )
+                conn.commit()
             self._incidencias.append(incidencia)
             self._siguiente_id += 1
-            self._guardar_sin_lock()
+            self._guardar_json_sin_lock()
             return dict(incidencia), [dict(i) for i in self._incidencias]
 
     def listar_incidencias(self, tipo=None, estado=None):
@@ -162,8 +335,14 @@ class AlmacenBitacora:
             encontrada = self._buscar(incidencia_id)
             if encontrada is None:
                 return None
+            with self._lock_db, closing(self._conectar_db()) as conn:
+                conn.execute(
+                    "UPDATE incidencias SET estado = ? WHERE id = ?",
+                    (nuevo_estado, incidencia_id),
+                )
+                conn.commit()
             encontrada["estado"] = nuevo_estado
-            self._guardar_sin_lock()
+            self._guardar_json_sin_lock()
             return dict(encontrada)
 
     def reemplazar_incidencia(self, incidencia_id, tipo, descripcion):
@@ -173,8 +352,14 @@ class AlmacenBitacora:
             encontrada = self._buscar(incidencia_id)
             if encontrada is None:
                 return None
+            with self._lock_db, closing(self._conectar_db()) as conn:
+                conn.execute(
+                    "UPDATE incidencias SET tipo = ?, descripcion = ?, estado = 'abierta' WHERE id = ?",
+                    (tipo, descripcion, incidencia_id),
+                )
+                conn.commit()
             encontrada.update({"tipo": tipo, "descripcion": descripcion, "estado": "abierta"})
-            self._guardar_sin_lock()
+            self._guardar_json_sin_lock()
             return dict(encontrada)
 
     def eliminar_incidencia(self, incidencia_id):
@@ -182,12 +367,67 @@ class AlmacenBitacora:
             encontrada = self._buscar(incidencia_id)
             if encontrada is None:
                 return False
+            with self._lock_db, closing(self._conectar_db()) as conn:
+                conn.execute("DELETE FROM incidencias WHERE id = ?", (incidencia_id,))
+                conn.commit()
             self._incidencias.remove(encontrada)
-            self._guardar_sin_lock()
+            self._guardar_json_sin_lock()
             return True
 
+    def resumen_por_fecha(self, fecha_iso):
+        """Consulta SQLite indexada (idx_incidencias_fecha / idx_alertas_fecha) por YYYY-MM-DD."""
+        with self._lock_db, closing(self._conectar_db()) as conn:
+            filas = conn.execute(
+                """
+                SELECT id, tipo, descripcion, estado, hora, origen
+                FROM incidencias
+                WHERE fecha = ?
+                ORDER BY id DESC
+                """,
+                (fecha_iso,),
+            ).fetchall()
+            filas_estado = conn.execute(
+                "SELECT estado, COUNT(*) AS total FROM incidencias WHERE fecha = ? GROUP BY estado",
+                (fecha_iso,),
+            ).fetchall()
+            filas_tipo = conn.execute(
+                "SELECT tipo, COUNT(*) AS total FROM incidencias WHERE fecha = ? GROUP BY tipo",
+                (fecha_iso,),
+            ).fetchall()
+            fila_alertas = conn.execute(
+                "SELECT COUNT(*) AS total FROM alertas_telegram WHERE fecha = ?",
+                (fecha_iso,),
+            ).fetchone()
+
+        por_estado = {"abierta": 0, "en_proceso": 0, "resuelta": 0}
+        for fila in filas_estado:
+            por_estado[fila["estado"]] = fila["total"]
+        por_tipo = {fila["tipo"]: fila["total"] for fila in filas_tipo}
+
+        incidencias = []
+        for fila in filas:
+            item = {
+                "id": fila["id"],
+                "tipo": fila["tipo"],
+                "descripcion": fila["descripcion"],
+                "estado": fila["estado"],
+                "hora": fila["hora"],
+            }
+            if fila["origen"]:
+                item["origen"] = fila["origen"]
+            incidencias.append(item)
+
+        return {
+            "fecha": fecha_iso,
+            "total": len(incidencias),
+            "por_estado": por_estado,
+            "por_tipo": por_tipo,
+            "total_alertas": fila_alertas["total"] if fila_alertas else 0,
+            "incidencias": incidencias,
+        }
+
     # ------------------------------------------------------------------
-    # Bitacora de Telegram (alertas_telegram.json)
+    # Bitacora de Telegram (alertas_telegram.json + SQLite)
     # ------------------------------------------------------------------
     def cargar_alertas(self):
         with self._lock_alertas:
@@ -195,15 +435,37 @@ class AlmacenBitacora:
             return datos if isinstance(datos, list) else []
 
     def registrar_alerta(self, evento):
-        """Agrega un evento asignandole id_alerta y hora; devuelve el evento."""
+        """Agrega un evento asignandole id_alerta y hora; persiste en SQLite y JSON."""
         with self._lock_alertas:
             datos = self._leer_json(self.ruta_alertas)
             alertas = datos if isinstance(datos, list) else []
+            hora = _ahora()
             registro = {
                 "id_alerta": max((a.get("id_alerta", 0) for a in alertas), default=0) + 1,
-                "hora": _ahora(),
+                "hora": hora,
             }
             registro.update(evento)
+            with self._lock_db, closing(self._conectar_db()) as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO alertas_telegram (
+                        id_alerta, hora, fecha, incidencia_id, tipo_incidencia,
+                        motivo, estado_envio, codigo_http, detalle
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        registro["id_alerta"],
+                        registro["hora"],
+                        _fecha_de_hora(registro["hora"]),
+                        registro.get("incidencia_id"),
+                        registro.get("tipo_incidencia"),
+                        registro.get("motivo"),
+                        registro.get("estado_envio"),
+                        registro.get("codigo_http"),
+                        registro.get("detalle"),
+                    ),
+                )
+                conn.commit()
             alertas.append(registro)
             self._escribir_atomico(self.ruta_alertas, alertas)
             return registro

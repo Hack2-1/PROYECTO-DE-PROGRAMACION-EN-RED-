@@ -3,13 +3,15 @@
 Un hilo en segundo plano hace long polling a getUpdates (solo conexiones
 salientes: no hay que abrir puertos). Solo responde a los chat_id autorizados.
 
-Comandos: /estado /incidencias /contadores /alertas /ayuda
+Comandos: /estado /incidencias /contadores /alertas /dia /fecha /ayuda
 """
 
+import re
 import sys
 import threading
 import time
-from datetime import datetime
+import unicodedata
+from datetime import datetime, timedelta
 
 import requests
 
@@ -17,10 +19,13 @@ from notificador_telegram import API
 
 MAX_TEXTO = 4000  # Telegram admite 4096 caracteres por mensaje
 
+DIAS_SEMANA = ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
+
 AYUDA = (
     "Comandos disponibles:\n"
     "/estado - estado general del servidor\n"
     "/incidencias - resumen y ultimas abiertas\n"
+    "/dia <dia|fecha> - reporte de un dia (ej. /dia miercoles, /dia ayer, /dia 2026-11-18)\n"
     "/contadores - peticiones por metodo y familia\n"
     "/alertas - ultimas alertas enviadas\n"
     "/ayuda - esta lista"
@@ -31,6 +36,32 @@ class ErrorTelegram(Exception):
     def __init__(self, codigo):
         super().__init__("Telegram respondio HTTP %d" % codigo)
         self.codigo = codigo
+
+
+def _normalizar_texto(texto):
+    sin_acentos = "".join(
+        c for c in unicodedata.normalize("NFD", str(texto)) if unicodedata.category(c) != "Mn"
+    )
+    return sin_acentos.strip().lower()
+
+
+def resolver_fecha_dia(argumento, referencia=None):
+    """Resuelve 'hoy', 'ayer', dia de la semana o 'YYYY-MM-DD' -> (fecha_iso, nombre_dia)."""
+    ref = referencia or datetime.now().astimezone().date()
+    limpio = _normalizar_texto(argumento)
+    if not limpio or limpio == "hoy":
+        fecha = ref
+    elif limpio == "ayer":
+        fecha = ref - timedelta(days=1)
+    elif limpio in DIAS_SEMANA:
+        objetivo = DIAS_SEMANA.index(limpio)
+        retroceso = (ref.weekday() - objetivo) % 7
+        fecha = ref - timedelta(days=retroceso)
+    elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", limpio):
+        fecha = datetime.strptime(limpio, "%Y-%m-%d").date()
+    else:
+        raise ValueError("Formato de fecha no reconocido: %s" % argumento)
+    return fecha.isoformat(), DIAS_SEMANA[fecha.weekday()]
 
 
 def _formatear_uptime(segundos):
@@ -64,7 +95,9 @@ class BotComandos:
     # Respuestas a comandos (logica pura, facil de probar)
     # ------------------------------------------------------------------
     def procesar_comando(self, texto):
-        comando = texto.strip().split()[0].lower().split("@")[0] if texto.strip() else ""
+        partes = texto.strip().split(maxsplit=1)
+        comando = partes[0].lower().split("@")[0] if partes else ""
+        argumento = partes[1] if len(partes) > 1 else ""
         manejadores = {
             "/start": lambda: AYUDA,
             "/ayuda": lambda: AYUDA,
@@ -72,6 +105,8 @@ class BotComandos:
             "/incidencias": self._incidencias,
             "/contadores": self._contadores,
             "/alertas": self._alertas,
+            "/dia": lambda: self._reporte_dia(argumento),
+            "/fecha": lambda: self._reporte_dia(argumento),
         }
         manejador = manejadores.get(comando)
         if manejador is None:
@@ -125,6 +160,36 @@ class BotComandos:
                 lineas.append("#%s [%s] %s" % (i["id"], i["tipo"], _recortar(i["descripcion"])))
         else:
             lineas.append("\nNo hay incidencias abiertas.")
+        return "\n".join(lineas)
+
+    def _reporte_dia(self, argumento):
+        try:
+            fecha_iso, nombre_dia = resolver_fecha_dia(argumento)
+        except ValueError:
+            return "Formato invalido. Usa por ejemplo: /dia miercoles, /dia hoy, /dia ayer o /dia 2026-11-18"
+
+        resumen = self.almacen.resumen_por_fecha(fecha_iso)
+        lineas = ["Reporte del %s (%s) [SQLite indexado]" % (nombre_dia, fecha_iso)]
+        if resumen["total"] == 0 and resumen["total_alertas"] == 0:
+            lineas.append("Sin incidencias ni alertas registradas ese dia.")
+            return "\n".join(lineas)
+
+        e = resumen["por_estado"]
+        lineas.append(
+            "Incidencias: %d total (%d abiertas, %d en proceso, %d resueltas)"
+            % (resumen["total"], e.get("abierta", 0), e.get("en_proceso", 0), e.get("resuelta", 0))
+        )
+        if resumen["por_tipo"]:
+            tipos = ", ".join("%s: %d" % (t, n) for t, n in sorted(resumen["por_tipo"].items()))
+            lineas.append("Por tipo: %s" % tipos)
+        lineas.append("Alertas Telegram enviadas: %d" % resumen["total_alertas"])
+        if resumen["incidencias"]:
+            lineas.append("\nRegistros de ese dia:")
+            for i in resumen["incidencias"][:5]:
+                lineas.append(
+                    "#%s [%s] (%s) %s"
+                    % (i["id"], i["tipo"], i["estado"], _recortar(i["descripcion"]))
+                )
         return "\n".join(lineas)
 
     def _contadores(self):

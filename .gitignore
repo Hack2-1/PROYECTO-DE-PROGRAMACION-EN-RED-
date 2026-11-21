@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 .venv/
 .vscode/
+*.db
+*.db-wal
+*.db-shm

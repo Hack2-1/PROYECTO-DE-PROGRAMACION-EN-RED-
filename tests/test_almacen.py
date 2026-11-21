@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -125,6 +126,46 @@ class PruebasAlmacen(unittest.TestCase):
         a2 = self.almacen.registrar_alerta({"incidencia_id": 2, "estado_envio": "ERROR_API"})
         self.assertEqual((a1["id_alerta"], a2["id_alerta"]), (1, 2))
         self.assertEqual(len(self.almacen.cargar_alertas()), 2)
+
+    def test_sqlite_indexado_resumen_por_fecha(self):
+        i1, _ = self.almacen.crear_incidencia("vulnerabilidad", "Puerto 23 en caja")
+        i2, _ = self.almacen.crear_incidencia("incidente", "Fuerza bruta SSH")
+        self.almacen.actualizar_estado(i2["id"], "resuelta")
+        self.almacen.registrar_alerta(
+            {"incidencia_id": i2["id"], "tipo_incidencia": "incidente", "motivo": "M", "estado_envio": "ENVIADO"}
+        )
+
+        # Insertar una incidencia de otro dia directamente en SQLite para aislar el filtro
+        with sqlite3.connect(self.almacen.ruta_db) as conn:
+            indices = [
+                fila[0]
+                for fila in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            ]
+            conn.execute(
+                """
+                INSERT INTO incidencias (id, tipo, descripcion, estado, hora, fecha, origen)
+                VALUES (99, 'alerta', 'De otro dia', 'abierta', '2026-11-18T10:00:00-06:00', '2026-11-18', NULL)
+                """
+            )
+            conn.commit()
+
+        self.assertIn("idx_incidencias_fecha", indices)
+        self.assertIn("idx_alertas_fecha", indices)
+
+        hoy = i1["hora"][:10]
+        resumen_hoy = self.almacen.resumen_por_fecha(hoy)
+        self.assertEqual(resumen_hoy["total"], 2)
+        self.assertEqual(resumen_hoy["por_estado"]["abierta"], 1)
+        self.assertEqual(resumen_hoy["por_estado"]["resuelta"], 1)
+        self.assertEqual(resumen_hoy["por_tipo"], {"incidente": 1, "vulnerabilidad": 1})
+        self.assertEqual(resumen_hoy["total_alertas"], 1)
+
+        resumen_miercoles = self.almacen.resumen_por_fecha("2026-11-18")
+        self.assertEqual(resumen_miercoles["total"], 1)
+        self.assertEqual(resumen_miercoles["incidencias"][0]["id"], 99)
+        self.assertEqual(resumen_miercoles["total_alertas"], 0)
 
 
 if __name__ == "__main__":

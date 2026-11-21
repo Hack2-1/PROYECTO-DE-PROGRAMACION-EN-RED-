@@ -1,4 +1,6 @@
+from datetime import date
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -9,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests  # noqa: E402
 
 from almacen import AlmacenBitacora  # noqa: E402
-from bot_comandos import BotComandos, ErrorTelegram  # noqa: E402
+from bot_comandos import BotComandos, ErrorTelegram, resolver_fecha_dia  # noqa: E402
 
 
 def actualizacion(update_id, chat_id, texto):
@@ -112,6 +114,37 @@ class PruebasBotComandos(unittest.TestCase):
     @mock.patch("bot_comandos.requests.post", side_effect=requests.ConnectionError())
     def test_fallo_al_responder_no_lanza(self, _post):
         self.bot._procesar_actualizacion(actualizacion(1, 111, "/estado"))
+
+    def test_comando_dia_miercoles_y_fecha_iso(self):
+        # Viernes 2026-11-20 -> el miercoles mas reciente es 2026-11-18
+        fecha_iso, nombre = resolver_fecha_dia("miércoles", referencia=date(2026, 11, 20))
+        self.assertEqual((fecha_iso, nombre), ("2026-11-18", "miercoles"))
+
+        with sqlite3.connect(self.almacen.ruta_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO incidencias (id, tipo, descripcion, estado, hora, fecha, origen)
+                VALUES (10, 'vulnerabilidad', 'Puerto 445 abierto', 'abierta',
+                        '2026-11-18T11:30:00-06:00', '2026-11-18', '192.168.1.20')
+                """
+            )
+            conn.commit()
+
+        r_fecha = self.bot.procesar_comando("/fecha 2026-11-18")
+        self.assertIn("miercoles (2026-11-18)", r_fecha)
+        self.assertIn("SQLite indexado", r_fecha)
+        self.assertIn("Puerto 445 abierto", r_fecha)
+
+        self.almacen.crear_incidencia("alerta", "Prueba hoy")
+        r_hoy = self.bot.procesar_comando("/dia hoy")
+        self.assertIn("1 total", r_hoy)
+        self.assertIn("Prueba hoy", r_hoy)
+
+        r_miercoles = self.bot.procesar_comando("/dia miercoles")
+        self.assertIn("Reporte del miercoles", r_miercoles)
+
+        r_invalido = self.bot.procesar_comando("/dia inventado")
+        self.assertIn("Formato invalido", r_invalido)
 
 
 if __name__ == "__main__":
