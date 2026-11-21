@@ -3,7 +3,10 @@
 
 import argparse
 import requests
-
+import threading
+import socket
+import ssl
+from urllib.parse import urlsplit
 
 class ClienteAPI:
     def __init__(self, url, certificado, api_key=None):
@@ -42,6 +45,74 @@ class ClienteAPI:
             return None, None
 
 
+def probar_concurrencia(cliente):
+    """Realiza tres consultas simultaneas por HTTPS."""
+    resultados = [None] * 3
+
+    def consultar(numero):
+        codigo, _ = cliente.solicitar("GET", "/salud")
+        resultados[numero] = codigo
+
+    hilos = [
+        threading.Thread(target=consultar, args=(i,))
+        for i in range(3)
+    ]
+
+    for hilo in hilos:
+        hilo.start()
+
+    for hilo in hilos:
+        hilo.join()
+
+    print("Resultados de concurrencia:", resultados)
+
+    if all(codigo == 200 for codigo in resultados):
+        print("PRUEBA CORRECTA: tres consultas exitosas.")
+    else:
+        print("PRUEBA FALLIDA: revisar las respuestas.")
+
+
+def probar_tolerancia(cliente):
+    """Interrumpe una peticion HTTPS y verifica el servidor."""
+    destino = urlsplit(cliente.url)
+
+    if destino.scheme != "https" or not destino.hostname:
+        print("Esta prueba requiere una URL HTTPS valida.")
+        return
+
+    host = destino.hostname
+    puerto = destino.port or 443
+
+    try:
+        contexto = ssl.create_default_context(
+            cafile=cliente.certificado
+        )
+
+        with socket.create_connection((host, puerto), timeout=5) as conexion:
+            with contexto.wrap_socket(
+                conexion, server_hostname=host
+            ) as tls:
+                peticion = (
+                    "POST /incidencias HTTP/1.1\r\n"
+                    f"Host: {host}\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Content-Length: 1000\r\n"
+                    "\r\n"
+                    '{"tipo":"prueba",'
+                )
+                tls.sendall(peticion.encode("utf-8"))
+                print("Conexion incompleta enviada y cerrada.")
+
+    except (OSError, ssl.SSLError) as error:
+        print(f"Error durante la prueba: {error}")
+
+    codigo, _ = cliente.solicitar("GET", "/salud")
+
+    if codigo == 200:
+        print("PRUEBA CORRECTA: el servidor sigue activo.")
+    else:
+        print("PRUEBA FALLIDA: revisar el estado del servidor.")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -64,6 +135,8 @@ def main():
         print("6. Reemplazar incidencia (PUT)")
         print("7. Eliminar incidencia (DELETE)")
         print("8. Consultar auditoria")
+        print("9. Prueba de concurrencia")
+        print("10. Prueba de tolerancia a fallos")
         print("0. Salir")
 
         opcion = input("Opcion: ").strip()
@@ -136,6 +209,13 @@ def main():
                 print(datos)
             continue
 
+        elif opcion == "9":
+            probar_concurrencia(cliente)
+            continue
+
+        elif opcion == "10":
+            probar_tolerancia(cliente)
+            continue
         else:
             print("Opcion no valida.")
             continue
