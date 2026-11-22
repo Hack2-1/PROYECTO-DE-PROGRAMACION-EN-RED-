@@ -19,6 +19,7 @@ from agente_puertos import ejecutar_escaneo, verificar_recursos_locales  # noqa:
 from cliente_admin import ClienteAPI  # noqa: E402
 from cliente_pruebas_alertas import (  # noqa: E402
     escenario_acumulacion_tres_abiertas,
+    escenario_puerto_no_autorizado,
     escenario_umbral_cpu,
     obtener_evidencia_alertas,
 )
@@ -375,8 +376,17 @@ class PruebasServidorTLS(unittest.TestCase):
                 resultados = escenario_acumulacion_tres_abiertas(url, self.cert)
                 self.assertEqual([r[0] for r in resultados], [201, 201, 201])
 
+                detectados = escenario_puerto_no_autorizado(url, self.cert)
+                self.assertEqual(len(detectados), 1)
+
                 evidencia = obtener_evidencia_alertas(url, self.cert)
-                self.assertEqual(len(evidencia["incidencias"]), 4)
+                self.assertEqual(len(evidencia["incidencias"]), 5)
+                self.assertTrue(
+                    any(
+                        f"Puerto no autorizado abierto: {detectados[0]}" in i["descripcion"]
+                        for i in evidencia["incidencias"]
+                    )
+                )
                 self.assertGreaterEqual(len(evidencia["alertas"]), 2)
                 self.assertEqual(
                     evidencia["alertas"][0]["motivo"],

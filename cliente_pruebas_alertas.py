@@ -14,6 +14,8 @@ from urllib.parse import urlsplit
 
 import requests
 
+from agente_puertos import ejecutar_escaneo
+
 
 def _cabeceras(api_key=None, con_json=False):
     headers = {}
@@ -138,6 +140,31 @@ def escenario_acumulacion_tres_abiertas(url, cert, api_key=None):
     return resultados
 
 
+def escenario_puerto_no_autorizado(url, cert, api_key=None, puerto_preferido=2323):
+    """Abre un puerto TCP sin autorizacion y deja que agente_puertos.py lo detecte."""
+    print(f"\n--- Escenario 5: Puerto TCP abierto sin autorizacion ({puerto_preferido}) ---")
+    servidor_prueba = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    servidor_prueba.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        try:
+            servidor_prueba.bind(("127.0.0.1", puerto_preferido))
+        except OSError:
+            servidor_prueba.bind(("127.0.0.1", 0))
+        servidor_prueba.listen(1)
+        puerto_abierto = servidor_prueba.getsockname()[1]
+        print(f"[INFO] Servicio temporal escuchando sin autorizacion en 127.0.0.1:{puerto_abierto}.")
+        return ejecutar_escaneo(
+            host="127.0.0.1",
+            puertos=[puerto_abierto],
+            lista_blanca=[],
+            url_servidor=url,
+            ruta_certificado=cert,
+            api_key=api_key,
+        )
+    finally:
+        servidor_prueba.close()
+
+
 def mostrar_evidencia(url, cert, api_key=None):
     """Imprime evidencia legible de incidencias y alertas enviadas a Telegram."""
     evidencia = obtener_evidencia_alertas(url, cert, api_key=api_key)
@@ -190,6 +217,7 @@ def ejecutar_demo_completa(url, cert, api_key=None):
     escenario_umbral_ram(url, cert, api_key=api_key)
     escenario_alteracion_seguridad(url, cert, api_key=api_key)
     escenario_acumulacion_tres_abiertas(url, cert, api_key=api_key)
+    escenario_puerto_no_autorizado(url, cert, api_key=api_key)
     return mostrar_evidencia(url, cert, api_key=api_key)
 
 
@@ -200,8 +228,9 @@ def menu_interactivo(url, cert, api_key=None):
         print("2. Levantar alerta critica por saturacion de RAM (93.5%)")
         print("3. Simular alteracion de seguridad (HTTP plano sin TLS)")
         print("4. Levantar alerta por acumulacion (3 incidencias abiertas)")
-        print("5. Ejecutar demostracion completa (todos los escenarios)")
-        print("6. Ver evidencia actual (/incidencias y /alertas Telegram)")
+        print("5. Provocar puerto TCP abierto sin autorizacion (deteccion real con sockets)")
+        print("6. Ejecutar demostracion completa (todos los escenarios tecnicos)")
+        print("7. Ver evidencia actual (/incidencias y /alertas Telegram)")
         print("0. Salir")
 
         opcion = input("Opcion: ").strip()
@@ -217,8 +246,10 @@ def menu_interactivo(url, cert, api_key=None):
         elif opcion == "4":
             escenario_acumulacion_tres_abiertas(url, cert, api_key=api_key)
         elif opcion == "5":
-            ejecutar_demo_completa(url, cert, api_key=api_key)
+            escenario_puerto_no_autorizado(url, cert, api_key=api_key)
         elif opcion == "6":
+            ejecutar_demo_completa(url, cert, api_key=api_key)
+        elif opcion == "7":
             mostrar_evidencia(url, cert, api_key=api_key)
         else:
             print("Opcion no valida.")
@@ -243,13 +274,14 @@ def construir_parser():
     )
     parser.add_argument(
         "--escenario",
-        choices=("cpu", "ram", "alteracion", "acumulacion", "demo"),
+        choices=("cpu", "ram", "alteracion", "acumulacion", "puerto", "demo"),
         help="Ejecuta directamente un escenario sin abrir el menu",
     )
     parser.add_argument("--cpu", action="store_true", help="Simula pico de CPU 96%")
     parser.add_argument("--ram", action="store_true", help="Simula saturacion de RAM 93.5%")
     parser.add_argument("--alteracion", action="store_true", help="Simula alteracion sin TLS")
     parser.add_argument("--acumulacion", action="store_true", help="Crea 3 incidencias abiertas")
+    parser.add_argument("--puerto", action="store_true", help="Abre puerto TCP sin autorizacion y lo detecta")
     parser.add_argument("--demo", action="store_true", help="Ejecuta todos los escenarios")
     parser.add_argument("--evidencia", action="store_true", help="Muestra tabla de evidencia")
     return parser
@@ -274,6 +306,9 @@ def main():
         acciones = True
     if args.acumulacion or args.escenario == "acumulacion":
         escenario_acumulacion_tres_abiertas(args.url, args.cert, api_key=api_key)
+        acciones = True
+    if args.puerto or args.escenario == "puerto":
+        escenario_puerto_no_autorizado(args.url, args.cert, api_key=api_key)
         acciones = True
     if args.evidencia:
         mostrar_evidencia(args.url, args.cert, api_key=api_key)
