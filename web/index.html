@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MiPyME "La Esquina" — Tienda Local y Evidencias</title>
+  <link rel="stylesheet" href="/estilos.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">POS</div>
+      <div>
+        <h1>MiPyME "La Esquina"</h1>
+        <p>Portal de la Tienda (:40000) · Conectado por HTTPS/TLS a Bitácora (:8443)</p>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <span id="badge-tls" class="pill offline">Conectando a :8443...</span>
+      <button type="button" class="btn btn-ghost" onclick="cargarTodo()">Actualizar</button>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Vistas del sistema">
+    <button type="button" class="tab-btn active" data-tab="tab-tienda" onclick="cambiarTab('tab-tienda')">
+      1. Tienda y Punto de Venta
+    </button>
+    <button type="button" class="tab-btn" data-tab="tab-fernanda" onclick="cambiarTab('tab-fernanda')">
+      2. Apartado de Evidencias: Fernanda (F7–F9)
+    </button>
+    <button type="button" class="tab-btn" data-tab="tab-monitor" onclick="cambiarTab('tab-monitor')">
+      3. Monitoreo y Alertas Telegram (F1–F6)
+    </button>
+  </nav>
+
+  <main class="container">
+    <!-- ============================================================ -->
+    <!-- VISTA 1: TIENDA / PUNTO DE VENTA (NEGOCIO SEPARADO)          -->
+    <!-- ============================================================ -->
+    <section id="tab-tienda" class="tab-panel active">
+      <div class="kpi-strip">
+        <div class="kpi-card">
+          <span class="kpi-label">Caja activa</span>
+          <strong id="kpi-caja">Caja 1 — Mostrador</strong>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Ventas de la jornada</span>
+          <strong id="kpi-ventas-num">0 tickets</strong>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Ingresos acumulados</span>
+          <strong id="kpi-ventas-monto">$0.00</strong>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Protección en red</span>
+          <strong id="kpi-proteccion">Verificando...</strong>
+        </div>
+      </div>
+
+      <div class="pos-layout">
+        <div class="card">
+          <div class="card-head">
+            <h2>Catálogo de Productos</h2>
+            <span class="muted">Selecciona productos para cobrar en mostrador</span>
+          </div>
+          <div id="catalogo-grid" class="product-grid"></div>
+        </div>
+
+        <aside class="card ticket-card">
+          <div class="card-head">
+            <h2>Ticket de Venta</h2>
+            <select id="selector-caja" onchange="cambiarCaja()">
+              <option value="Caja 1 — Mostrador (192.168.1.21)">Caja 1 — Mostrador</option>
+              <option value="Caja 2 — Inventario (192.168.1.22)">Caja 2 — Inventario</option>
+            </select>
+          </div>
+
+          <div id="carrito-lista" class="cart-list">
+            <p class="muted empty-msg">El ticket está vacío. Agrega productos del catálogo.</p>
+          </div>
+
+          <div class="cart-totals">
+            <div class="line"><span>Subtotal</span><span id="ticket-subtotal">$0.00</span></div>
+            <div class="line"><span>IVA (16%)</span><span id="ticket-iva">$0.00</span></div>
+            <div class="line total"><span>Total</span><span id="ticket-total">$0.00</span></div>
+          </div>
+
+          <div class="actions-col">
+            <button type="button" class="btn btn-primary" onclick="cobrarVenta()">Cobrar venta</button>
+            <button type="button" class="btn btn-ghost" onclick="vaciarCarrito()">Limpiar ticket</button>
+          </div>
+          <p id="msg-pos" class="feedback"></p>
+
+          <hr class="sep">
+          <div class="incident-box">
+            <h3>Incidente físico en mostrador</h3>
+            <p class="muted">Reporta fallos locales (corte eléctrico, terminal bancaria, USB desconocido) hacia la bitácora central.</p>
+            <div class="row">
+              <input id="tienda-incidente-txt" type="text" placeholder="Ej. Falla en terminal bancaria Caja 1">
+              <button type="button" class="btn btn-danger" onclick="reportarDesdeTienda()">Reportar</button>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Últimos Tickets Cobrados</h2>
+          <span class="muted">Operación comercial local (sin mezclar registros técnicos)</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Folio</th><th>Hora</th><th>Caja</th><th>Artículos</th><th>Total</th></tr>
+            </thead>
+            <tbody id="tabla-ventas">
+              <tr><td colspan="5" class="muted">Aún no hay ventas cobradas en esta sesión.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- VISTA 2: APARTADO DE EVIDENCIAS DE FERNANDA (F7, F8 y F9)    -->
+    <!-- ============================================================ -->
+    <section id="tab-fernanda" class="tab-panel">
+      <div class="banner-fernanda">
+        <div>
+          <span class="badge-purple">FERNANDA · F7, F8 y F9</span>
+          <h2>Apartado de Evidencias — Gestión REST, Auditoría y Pruebas de Concurrencia</h2>
+          <p>Todas las acciones consumen el servidor HTTPS (:8443) mediante <code>ClienteAPI</code> (<code>cliente_admin.py</code>).</p>
+        </div>
+        <div class="evidencia-counter">
+          <span class="muted">Pruebas ejecutadas</span>
+          <strong id="contador-evidencias">0</strong>
+        </div>
+      </div>
+
+      <!-- BLOQUE F9 -->
+      <div class="grid-3">
+        <div class="card card-purple">
+          <div class="card-head">
+            <h3><span class="tag-fn">F9</span> Concurrencia y Tolerancia TLS</h3>
+          </div>
+          <p class="muted">Rutinas oficiales de estrés y recuperación de <code>cliente_admin.py</code>.</p>
+          <div class="actions-col">
+            <button type="button" class="btn btn-purple" onclick="probarConcurrencia()">
+              Ejecutar 3 hilos HTTPS simultáneos
+            </button>
+            <button type="button" class="btn btn-warn" onclick="probarTolerancia()">
+              Simular desconexión abrupta TLS
+            </button>
+          </div>
+          <div id="resultado-f9" class="result-box muted">Sin pruebas ejecutadas aún.</div>
+        </div>
+
+        <div class="card card-purple">
+          <div class="card-head">
+            <h3><span class="tag-fn">F9 / F4</span> Registrar Incidencia (POST)</h3>
+          </div>
+          <form class="form-stack" onsubmit="crearIncidencia(event)">
+            <select id="nuevo-tipo">
+              <option value="alerta">alerta (registro estándar)</option>
+              <option value="vulnerabilidad">vulnerabilidad (puerto / servicio)</option>
+              <option value="incidente">incidente (crítico -> dispara Telegram)</option>
+            </select>
+            <input id="nuevo-desc" type="text" placeholder="Descripción de prueba (ej. Puerto 23 abierto)" required>
+            <button type="submit" class="btn btn-blue">Enviar POST /incidencias</button>
+          </form>
+        </div>
+
+        <div class="card card-purple">
+          <div class="card-head">
+            <h3><span class="tag-fn">F7</span> Reemplazo Completo (PUT)</h3>
+          </div>
+          <form class="form-stack" onsubmit="reemplazarIncidencia(event)">
+            <div class="row">
+              <input id="put-id" type="number" min="1" placeholder="ID" required style="width:90px">
+              <input id="put-tipo" type="text" value="alerta" placeholder="Tipo" required style="flex:1">
+            </div>
+            <input id="put-desc" type="text" placeholder="Nueva descripción (reinicia estado a abierta)" required>
+            <button type="submit" class="btn btn-purple">Ejecutar PUT /incidencias/&lt;id&gt;</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- BLOQUE F7 y F8: TABLA CRUD -->
+      <div class="card">
+        <div class="card-head">
+          <h2><span class="tag-fn">F7 / F8</span> Incidencias en SQLite — PATCH (estado), PUT (cargar) y DELETE (204)</h2>
+          <div class="row">
+            <select id="filtro-estado" onchange="renderizarIncidencias()">
+              <option value="">Todos los estados</option>
+              <option value="abierta">abierta</option>
+              <option value="en_proceso">en_proceso</option>
+              <option value="resuelta">resuelta</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Hora</th>
+                <th>Tipo</th>
+                <th>Descripción</th>
+                <th>Estado</th>
+                <th>Acciones F7 / F8</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-incidencias">
+              <tr><td colspan="6" class="muted">Cargando incidencias...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- BLOQUE F8: AUDITORIA VISUAL (SIN JSON CRUDO) -->
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3><span class="tag-fn">F8</span> Contadores HTTP (GET /contadores)</h3>
+            <strong id="total-peticiones-badge" class="pill-soft">0 peticiones</strong>
+          </div>
+          <div id="panel-contadores" class="metrics-grid"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3><span class="tag-fn">F8</span> Alertas Telegram (GET /alertas)</h3>
+            <strong id="total-alertas-badge" class="pill-soft">0 alertas</strong>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>#</th><th>Hora</th><th>Inc.</th><th>Motivo</th><th>Estado</th></tr>
+              </thead>
+              <tbody id="tabla-alertas">
+                <tr><td colspan="5" class="muted">Sin alertas registradas.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3><span class="tag-fn">F8</span> Bitácora de Tráfico y Seguridad (GET /logs — últimos 10)</h3>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>#</th><th>Hora</th><th>Tipo / Método</th><th>Ruta o Detalle</th><th>Código</th><th>Origen</th></tr>
+            </thead>
+            <tbody id="tabla-logs">
+              <tr><td colspan="6" class="muted">Sin registros aún.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- BITACORA DE EVIDENCIAS EJECUTADAS -->
+      <div class="card">
+        <div class="card-head">
+          <h3>Historial de Evidencias Levantadas en esta Sesión</h3>
+          <button type="button" class="btn btn-ghost" onclick="limpiarBitacora()">Limpiar historial</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Hora</th><th>Función</th><th>Operación</th><th>HTTP</th><th>Resultado</th></tr>
+            </thead>
+            <tbody id="tabla-evidencias">
+              <tr><td colspan="5" class="muted">Ejecuta cualquier acción de F7, F8 o F9 para registrar la evidencia aquí.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- VISTA 3: MONITOREO DE SERVIDOR Y SIMULADOR TELEGRAM (F1–F6)  -->
+    <!-- ============================================================ -->
+    <section id="tab-monitor" class="tab-panel">
+      <div class="grid-3">
+        <div class="card">
+          <span class="kpi-label">Uso de CPU (umbral 85%)</span>
+          <div class="meter-row"><strong id="lbl-cpu">0%</strong></div>
+          <div class="meter"><div id="bar-cpu" class="meter-fill" style="width:0%"></div></div>
+          <p class="muted" style="margin-top:8px;">Monitoreado automáticamente cada 30 s en el servidor.</p>
+        </div>
+        <div class="card">
+          <span class="kpi-label">Memoria RAM (umbral 85%)</span>
+          <div class="meter-row"><strong id="lbl-ram">0%</strong><span id="lbl-ram-mb" class="muted"></span></div>
+          <div class="meter"><div id="bar-ram" class="meter-fill" style="width:0%"></div></div>
+          <p class="muted" style="margin-top:8px;">Lectura en vivo desde <code>/proc/meminfo</code>.</p>
+        </div>
+        <div class="card">
+          <span class="kpi-label">Almacenamiento (umbral 90%)</span>
+          <div class="meter-row"><strong id="lbl-disco">0%</strong></div>
+          <div class="meter"><div id="bar-disco" class="meter-fill" style="width:0%"></div></div>
+          <p id="lbl-tls-info" class="muted" style="margin-top:8px;">Canal TLS: --</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Simulador Rápido de Alertas hacia Telegram (@monitor_incidentes_bot)</h2>
+          <span class="muted">Genera evidencia en <code>bitacora.db</code> y envía notificación real al celular</span>
+        </div>
+        <div class="row">
+          <button type="button" class="btn btn-danger" onclick="simularEscenario('cpu')">Simular Pico CPU 96%</button>
+          <button type="button" class="btn btn-warn" onclick="simularEscenario('ram')">Simular RAM 93.5%</button>
+          <button type="button" class="btn btn-purple" onclick="simularIntrusoTls()">Simular Intrusión sin TLS</button>
+          <button type="button" class="btn btn-blue" onclick="simularEscenario('acumulacion')">Simular 3 Abiertas (Acumulación)</button>
+        </div>
+        <p id="msg-monitor" class="feedback"></p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

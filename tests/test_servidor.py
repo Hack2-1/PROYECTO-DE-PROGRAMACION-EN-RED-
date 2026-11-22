@@ -433,6 +433,8 @@ class PruebasServidorTLS(unittest.TestCase):
                 self.assertEqual(html.status_code, 200)
                 self.assertIn("Apartado de Evidencias", html.text)
                 self.assertIn("FERNANDA", html.text)
+                self.assertEqual(requests.get(base_web + "/estilos.css", timeout=10).status_code, 200)
+                self.assertEqual(requests.get(base_web + "/app.js", timeout=10).status_code, 200)
 
                 r_post = requests.post(
                     base_web + "/api/incidencias",
