@@ -6,13 +6,16 @@ Este documento responde punto por punto a las preguntas técnicas sobre flujo de
 
 ## 1. ¿De dónde viene la información? (Origen de los datos)
 
-La información nace en dos fuentes dentro de la red privada (LAN) de la MiPyME:
+La información nace en tres fuentes automáticas y administrativas dentro de la red privada (LAN) de la MiPyME:
 
-1. **Agentes de monitoreo en las terminales (`agente_puertos.py` — F6):**
-   - Cada terminal ejecuta periódicamente un sondeo TCP local mediante `socket.connect_ex(("127.0.0.1", puerto))` sobre puertos sensibles definidos (`21/FTP`, `22/SSH`, `23/Telnet`, `445/SMB`, `3389/RDP`).
-   - Cuando detecta un puerto abierto (`resultado == 0`) que no está en su lista blanca local, genera automáticamente un reporte de vulnerabilidad hacia el servidor central.
-2. **Consola administrativa (`cliente_admin.py` — F9 / `curl`):**
-   - El administrador o soporte técnico registra incidentes manuales (`POST`), consulta historial (`GET`) o actualiza el ciclo de vida (`PATCH`, `PUT`, `DELETE`).
+1. **Monitor automático del servidor (`MonitorRecursosServidor` en `servidor_bitacora.py` — ciclo cada 30 s):**
+   - Lee directamente métricas del kernel Linux (`/proc/stat`, `/proc/meminfo` y `shutil.disk_usage("/")`) y la auditoría de seguridad (`/logs`).
+   - Cuando el servidor rebasa un umbral configurable (por defecto `CPU >= 85 %`, `RAM >= 85 %`, `Disco >= 90 %`) o detecta alteraciones de acceso (`TLS_RECHAZADO` / `API_KEY_RECHAZADA`), **registra automáticamente la incidencia como evidencia** en `bitacora.db` / `incidencias.json` y dispara la alerta a Telegram.
+2. **Agentes de monitoreo en las terminales (`agente_puertos.py` — F6, cada 30 s):**
+   - Cada terminal ejecuta periódicamente un sondeo TCP local mediante `socket.connect_ex(("127.0.0.1", puerto))` sobre puertos sensibles definidos (`21/FTP`, `22/SSH`, `23/Telnet`, `445/SMB`, `3389/RDP`) y revisa umbrales locales de CPU/RAM.
+   - Cuando detecta un puerto abierto fuera de lista blanca o un exceso de recursos, envía automáticamente un `POST /incidencias` hacia el servidor central (incluyendo opciones de simulación `--simular-cpu` / `--simular-ram` para demostración).
+3. **Consola administrativa (`cliente_admin.py` — F9 / `curl`):**
+   - El soporte técnico consulta el historial (`GET`), atiende y cierra las incidencias generadas automáticamente (`PATCH` $\rightarrow$ `en_proceso` / `resuelta`), o registra eventos manuales extraordinarios.
 
 ---
 
@@ -89,10 +92,10 @@ Para resolver esto sin romper la compatibilidad del contrato con el equipo, **`a
 La comunicación se divide en dos flujos independientes, ambos utilizando **únicamente conexiones HTTPS salientes hacia `api.telegram.org`** (sin abrir puertos entrantes en el firewall ni exponer la LAN de la MiPyME a Internet):
 
 1. **Alertas automáticas por umbral (`notificador_telegram.py` — F3):**
-   - Al registrarse una nueva incidencia, se evalúa el umbral:
-     - **Umbral crítico directo (1/1):** si `tipo` es `"incidente"` o `"incidente_critico"`.
+   - Cada vez que llega una incidencia (desde un agente o desde el monitor automático cada 30 s del propio servidor al rebasar CPU, RAM, disco o alteraciones TLS/API-Key), se evalúa el umbral:
+     - **Umbral crítico directo (1/1):** si `tipo` es `"incidente"` o `"incidente_critico"` (como un pico de 96 % de CPU o un rechazo de seguridad).
      - **Umbral por acumulación:** si hay $\ge 3$ incidencias en estado `"abierta"`.
-   - Si supera el umbral, el servidor ejecuta `requests.post("https://api.telegram.org/bot<TOKEN>/sendMessage", ..., timeout=5)` dentro de un bloque `try/except`.
+   - Si supera el umbral, el servidor ejecuta `requests.post("https://api.telegram.org/bot<TOKEN>/sendMessage", ..., timeout=5)` dentro de un bloque `try/except`, dejando evidencia tanto en `incidencias` (qué pasó y por qué) como en `alertas_telegram`.
    - Si no hay Internet, registra `FALLIDO_SIN_INTERNET` (`codigo_http = 503`) en `alertas_telegram` (SQLite y JSON) y el monitoreo local continúa operando sin interrupciones.
 
 2. **Consultas interactivas del administrador (`notificador_telegram.py` — `BotComandos`, parte de F3):**

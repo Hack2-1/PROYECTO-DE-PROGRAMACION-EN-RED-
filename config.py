@@ -57,3 +57,10 @@ TELEGRAM_ADMIN_IDS = ADMIN_CHAT_IDS
 API_KEYS = {k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.strip()}
 BOT_COMANDOS = os.environ.get("BOT_COMANDOS", "1").strip() not in ("0", "false", "no")
 UMBRAL_ABIERTAS = _entero("UMBRAL_ABIERTAS", 3)
+
+# Monitoreo automatico por umbrales del servidor (cada INTERVALO_MONITOR segundos)
+UMBRAL_CPU = _entero("UMBRAL_CPU", 85)
+UMBRAL_RAM = _entero("UMBRAL_RAM", 85)
+UMBRAL_DISCO = _entero("UMBRAL_DISCO", 90)
+INTERVALO_MONITOR = _entero("INTERVALO_MONITOR", 30)
+MONITOR_SERVIDOR = os.environ.get("MONITOR_SERVIDOR", "1").strip() not in ("0", "false", "no")

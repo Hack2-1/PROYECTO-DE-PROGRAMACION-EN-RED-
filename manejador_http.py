@@ -184,16 +184,20 @@ class ManejadorBitacora(BaseHTTPRequestHandler):
     def manejar_salud(self):
         conexion = self.connection
         cifrado = conexion.cipher() if isinstance(conexion, ssl.SSLSocket) else None
-        self._enviar_json(
-            200,
-            {
-                "estado": "ok",
-                "tls": isinstance(conexion, ssl.SSLSocket),
-                "version_tls": conexion.version() if cifrado else None,
-                "cifrado": cifrado[0] if cifrado else None,
-                "hora": datetime.now().astimezone().isoformat(timespec="seconds"),
-            },
-        )
+        payload = {
+            "estado": "ok",
+            "tls": isinstance(conexion, ssl.SSLSocket),
+            "version_tls": conexion.version() if cifrado else None,
+            "cifrado": cifrado[0] if cifrado else None,
+            "hora": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+        obtener_metricas = getattr(self.server, "obtener_metricas", None)
+        if callable(obtener_metricas):
+            try:
+                payload["recursos"] = obtener_metricas(intervalo_cpu=0.05)
+            except Exception:
+                pass
+        self._enviar_json(200, payload)
 
     def _no_implementado(self, funcion, responsable):
         self._enviar_json(

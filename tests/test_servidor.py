@@ -12,12 +12,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import requests  # noqa: E402
 
 from almacen import AlmacenBitacora  # noqa: E402
-from agente_puertos import ejecutar_escaneo  # noqa: E402
+from agente_puertos import ejecutar_escaneo, verificar_recursos_locales  # noqa: E402
 from cliente_admin import ClienteAPI  # noqa: E402
 from generar_certificados import generar  # noqa: E402
 from manejador_http import ManejadorBitacora  # noqa: E402
 from notificador_telegram import NotificadorTelegram  # noqa: E402
-from servidor_bitacora import ServidorBitacoraHTTPS, crear_contexto_tls  # noqa: E402
+from servidor_bitacora import (  # noqa: E402
+    MonitorRecursosServidor,
+    ServidorBitacoraHTTPS,
+    crear_contexto_tls,
+)
 
 
 class PruebasServidorTLS(unittest.TestCase):
@@ -49,6 +53,9 @@ class PruebasServidorTLS(unittest.TestCase):
         cuerpo = r.json()
         self.assertTrue(cuerpo["tls"])
         self.assertTrue(cuerpo["version_tls"].startswith("TLS"))
+        self.assertIn("recursos", cuerpo)
+        for campo in ("cpu_porcentaje", "ram_porcentaje", "disco_porcentaje"):
+            self.assertIn(campo, cuerpo["recursos"])
 
     def test_http_plano_es_rechazado_y_registrado(self):
         antes = len([l for l in self.almacen.obtener_logs() if l["tipo"] == "TLS_RECHAZADO"])
@@ -164,51 +171,52 @@ class PruebasServidorTLS(unittest.TestCase):
 
     def test_integracion_agente_puertos_y_cliente_admin(self):
         # F6: socket TCP abierto simulado -> agente_puertos reporta por HTTPS con X-API-Key
-        almacen_e2e = AlmacenBitacora(
-            os.path.join(self.dir.name, "i_e2e.json"),
-            os.path.join(self.dir.name, "a_e2e.json"),
-        )
-        srv = ServidorBitacoraHTTPS(
-            ("127.0.0.1", 0),
-            almacen_e2e,
-            NotificadorTelegram("", "", almacen_e2e),
-            crear_contexto_tls(self.cert, self.llave),
-            api_keys={"llave-equipo-01"},
-        )
-        hilo = threading.Thread(target=srv.serve_forever, daemon=True)
-        hilo.start()
-        escucha = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        escucha.bind(("127.0.0.1", 0))
-        escucha.listen(1)
-        puerto_abierto = escucha.getsockname()[1]
-        try:
-            url = "https://127.0.0.1:%d" % srv.server_address[1]
-            detectados = ejecutar_escaneo(
-                host="127.0.0.1",
-                puertos=[puerto_abierto],
-                lista_blanca=[],
-                url_servidor=url,
-                ruta_certificado=self.cert,
-                api_key="llave-equipo-01",
+        with tempfile.TemporaryDirectory() as tmp:
+            almacen_e2e = AlmacenBitacora(
+                os.path.join(tmp, "i_e2e.json"),
+                os.path.join(tmp, "a_e2e.json"),
             )
-            self.assertEqual(detectados, [puerto_abierto])
-
-            # F9: ClienteAPI autenticado consulta y cierra la incidencia detectada por F6
-            cliente = ClienteAPI(url, self.cert, api_key="llave-equipo-01")
-            cod, lista = cliente.solicitar("GET", "/incidencias")
-            self.assertEqual(cod, 200)
-            self.assertEqual(len(lista), 1)
-            self.assertIn(str(puerto_abierto), lista[0]["descripcion"])
-
-            cod_patch, actualizada = cliente.solicitar(
-                "PATCH", f"/incidencias/{lista[0]['id']}", {"estado": "resuelta"}
+            srv = ServidorBitacoraHTTPS(
+                ("127.0.0.1", 0),
+                almacen_e2e,
+                NotificadorTelegram("", "", almacen_e2e),
+                crear_contexto_tls(self.cert, self.llave),
+                api_keys={"llave-equipo-01"},
             )
-            self.assertEqual(cod_patch, 200)
-            self.assertEqual(actualizada["estado"], "resuelta")
-        finally:
-            escucha.close()
-            srv.shutdown()
-            srv.server_close()
+            hilo = threading.Thread(target=srv.serve_forever, daemon=True)
+            hilo.start()
+            escucha = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            escucha.bind(("127.0.0.1", 0))
+            escucha.listen(1)
+            puerto_abierto = escucha.getsockname()[1]
+            try:
+                url = "https://127.0.0.1:%d" % srv.server_address[1]
+                detectados = ejecutar_escaneo(
+                    host="127.0.0.1",
+                    puertos=[puerto_abierto],
+                    lista_blanca=[],
+                    url_servidor=url,
+                    ruta_certificado=self.cert,
+                    api_key="llave-equipo-01",
+                )
+                self.assertEqual(detectados, [puerto_abierto])
+
+                # F9: ClienteAPI autenticado consulta y cierra la incidencia detectada por F6
+                cliente = ClienteAPI(url, self.cert, api_key="llave-equipo-01")
+                cod, lista = cliente.solicitar("GET", "/incidencias")
+                self.assertEqual(cod, 200)
+                self.assertEqual(len(lista), 1)
+                self.assertIn(str(puerto_abierto), lista[0]["descripcion"])
+
+                cod_patch, actualizada = cliente.solicitar(
+                    "PATCH", f"/incidencias/{lista[0]['id']}", {"estado": "resuelta"}
+                )
+                self.assertEqual(cod_patch, 200)
+                self.assertEqual(actualizada["estado"], "resuelta")
+            finally:
+                escucha.close()
+                srv.shutdown()
+                srv.server_close()
 
     def test_auditoria_automatica_cuenta_peticiones(self):
         antes = self.almacen.obtener_contadores()["por_metodo"].get("GET", 0)
@@ -241,38 +249,97 @@ class PruebasServidorTLS(unittest.TestCase):
                     return
                 self._enviar_json(200, {"autorizado": True})
 
-        almacen_auth = AlmacenBitacora(
-            os.path.join(self.dir.name, "i_auth.json"),
-            os.path.join(self.dir.name, "a_auth.json"),
-        )
-        srv = ServidorBitacoraHTTPS(
-            ("127.0.0.1", 0),
-            almacen_auth,
-            NotificadorTelegram("", "", almacen_auth),
-            crear_contexto_tls(self.cert, self.llave),
-            manejador=ManejadorProtegido,
-            api_keys={"clave-secreta-01"},
-        )
-        hilo = threading.Thread(target=srv.serve_forever, daemon=True)
-        hilo.start()
-        try:
-            url = "https://127.0.0.1:%d/incidencias" % srv.server_address[1]
-            r_sin = requests.post(url, json={}, verify=self.cert, timeout=10)
-            self.assertEqual(r_sin.status_code, 401)
-            r_mal = requests.post(
-                url, json={}, headers={"X-API-Key": "incorrecta"}, verify=self.cert, timeout=10
+        with tempfile.TemporaryDirectory() as tmp:
+            almacen_auth = AlmacenBitacora(
+                os.path.join(tmp, "i_auth.json"),
+                os.path.join(tmp, "a_auth.json"),
             )
-            self.assertEqual(r_mal.status_code, 401)
-            r_ok = requests.post(
-                url, json={}, headers={"X-API-Key": "clave-secreta-01"}, verify=self.cert, timeout=10
+            srv = ServidorBitacoraHTTPS(
+                ("127.0.0.1", 0),
+                almacen_auth,
+                NotificadorTelegram("", "", almacen_auth),
+                crear_contexto_tls(self.cert, self.llave),
+                manejador=ManejadorProtegido,
+                api_keys={"clave-secreta-01"},
             )
-            self.assertEqual(r_ok.status_code, 200)
-            self.assertTrue(r_ok.json()["autorizado"])
-            rechazos = [l for l in almacen_auth.obtener_logs() if l["tipo"] == "API_KEY_RECHAZADA"]
-            self.assertEqual(len(rechazos), 2)
-        finally:
-            srv.shutdown()
-            srv.server_close()
+            hilo = threading.Thread(target=srv.serve_forever, daemon=True)
+            hilo.start()
+            try:
+                url = "https://127.0.0.1:%d/incidencias" % srv.server_address[1]
+                r_sin = requests.post(url, json={}, verify=self.cert, timeout=10)
+                self.assertEqual(r_sin.status_code, 401)
+                r_mal = requests.post(
+                    url, json={}, headers={"X-API-Key": "incorrecta"}, verify=self.cert, timeout=10
+                )
+                self.assertEqual(r_mal.status_code, 401)
+                r_ok = requests.post(
+                    url, json={}, headers={"X-API-Key": "clave-secreta-01"}, verify=self.cert, timeout=10
+                )
+                self.assertEqual(r_ok.status_code, 200)
+                self.assertTrue(r_ok.json()["autorizado"])
+                rechazos = [l for l in almacen_auth.obtener_logs() if l["tipo"] == "API_KEY_RECHAZADA"]
+                self.assertEqual(len(rechazos), 2)
+            finally:
+                srv.shutdown()
+                srv.server_close()
+
+    def test_monitor_recursos_cpu_ram_crea_incidencia_y_alerta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            almacen_mon = AlmacenBitacora(
+                os.path.join(tmp, "i_mon.json"),
+                os.path.join(tmp, "a_mon.json"),
+            )
+            notificador_mon = NotificadorTelegram("", "", almacen_mon)
+            monitor = MonitorRecursosServidor(
+                almacen_mon, notificador_mon, umbral_cpu=85, umbral_ram=85, umbral_disco=90
+            )
+
+            creadas = monitor.evaluar_una_vez(
+                {"cpu_porcentaje": 96.0, "ram_porcentaje": 91.5, "disco_porcentaje": 50.0}
+            )
+            self.assertEqual(len(creadas), 2)
+            self.assertIn("96.0%", creadas[0]["descripcion"])
+            self.assertIn("91.5%", creadas[1]["descripcion"])
+            self.assertEqual(len(almacen_mon.cargar_alertas()), 2)
+
+            # Segundo ciclo con las mismas incidencias abiertas: no duplica
+            repetidas = monitor.evaluar_una_vez(
+                {"cpu_porcentaje": 96.0, "ram_porcentaje": 91.5, "disco_porcentaje": 50.0}
+            )
+            self.assertEqual(repetidas, [])
+            self.assertEqual(len(almacen_mon.listar_incidencias()), 2)
+
+            # Al resolver CPU, una nueva alza vuelve a generar incidencia
+            almacen_mon.actualizar_estado(creadas[0]["id"], "resuelta")
+            almacen_mon.registrar_evento("TLS_RECHAZADO", "10.0.0.5", "HTTP plano")
+            nuevas = monitor.evaluar_una_vez(
+                {"cpu_porcentaje": 97.0, "ram_porcentaje": 40.0, "disco_porcentaje": 50.0}
+            )
+            self.assertEqual(len(nuevas), 2)
+            self.assertTrue(any("97.0%" in i["descripcion"] for i in nuevas))
+            self.assertTrue(any("Alteracion de seguridad" in i["descripcion"] for i in nuevas))
+
+            # Verificar persistencia en SQLite por fecha actual
+            hoy = creadas[0]["hora"][:10]
+            resumen = almacen_mon.resumen_por_fecha(hoy)
+            self.assertEqual(resumen["total"], 4)
+            self.assertEqual(resumen["total_alertas"], 4)
+
+    def test_agente_simula_cpu_96_por_https(self):
+        activos = verificar_recursos_locales(
+            url_servidor=self.base,
+            ruta_certificado=self.cert,
+            umbral_cpu=85.0,
+            umbral_ram=85.0,
+            simular_cpu=96.0,
+            simular_ram=30.0,
+        )
+        self.assertEqual(activos, {"cpu"})
+        incidencias = self.almacen.listar_incidencias(tipo="incidente")
+        self.assertTrue(any("96.0%" in i["descripcion"] for i in incidencias))
+        for inc in incidencias:
+            if "96.0%" in inc["descripcion"]:
+                self.almacen.eliminar_incidencia(inc["id"])
 
 
 if __name__ == "__main__":

@@ -221,10 +221,23 @@ class BotComandos:
         fam = c["por_familia"]
         e = self._conteo_estados()
         rechazos = sum(1 for l in self.almacen.obtener_logs() if l.get("tipo") == "TLS_RECHAZADO")
+        linea_recursos = ""
+        obtener_metricas = self.info_servidor.get("obtener_metricas")
+        if callable(obtener_metricas):
+            try:
+                m = obtener_metricas(intervalo_cpu=0.05)
+                linea_recursos = "Recursos: CPU %.1f%% | RAM %.1f%% | Disco %.1f%%\n" % (
+                    m.get("cpu_porcentaje", 0.0),
+                    m.get("ram_porcentaje", 0.0),
+                    m.get("disco_porcentaje", 0.0),
+                )
+            except Exception:
+                linea_recursos = ""
         return (
             "SERVIDOR: ACTIVO\n"
             "Uptime: %s\n"
             "Escucha: puerto %s (%s)\n"
+            "%s"
             "Incidencias: %d abiertas, %d en proceso, %d resueltas\n"
             "Peticiones: %d (2xx: %d, 4xx: %d, 5xx: %d)\n"
             "Rechazos TLS recientes: %d\n"
@@ -233,6 +246,7 @@ class BotComandos:
                 _formatear_uptime(time.time() - self.inicio),
                 self.info_servidor.get("puerto", "?"),
                 self.info_servidor.get("tls", "HTTPS/TLS"),
+                linea_recursos,
                 e["abierta"], e["en_proceso"], e["resuelta"],
                 c["total"], fam.get("2xx", 0), fam.get("4xx", 0), fam.get("5xx", 0),
                 rechazos,
