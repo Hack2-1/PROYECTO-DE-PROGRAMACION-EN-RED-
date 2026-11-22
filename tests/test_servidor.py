@@ -32,6 +32,7 @@ from servidor_bitacora import (  # noqa: E402
     crear_contexto_tls,
     main as servidor_main,
 )
+from web_tienda import ServidorWebTienda  # noqa: E402
 
 
 class PruebasServidorTLS(unittest.TestCase):
@@ -406,6 +407,79 @@ class PruebasServidorTLS(unittest.TestCase):
         self.assertEqual(codigo, 1)
         self.assertIn("ya esta en uso", salida_err.getvalue())
         self.assertIn("--puerto", salida_err.getvalue())
+
+    def test_web_tienda_sirve_portal_y_evidencias_fernanda(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            almacen_web = AlmacenBitacora(
+                os.path.join(tmp, "i_web.json"),
+                os.path.join(tmp, "a_web.json"),
+            )
+            srv_https = ServidorBitacoraHTTPS(
+                ("127.0.0.1", 0),
+                almacen_web,
+                NotificadorTelegram("", "", almacen_web),
+                crear_contexto_tls(self.cert, self.llave),
+            )
+            hilo_https = threading.Thread(target=srv_https.serve_forever, daemon=True)
+            hilo_https.start()
+
+            url_https = "https://127.0.0.1:%d" % srv_https.server_address[1]
+            srv_web = ServidorWebTienda(("127.0.0.1", 0), url_https, self.cert)
+            hilo_web = threading.Thread(target=srv_web.serve_forever, daemon=True)
+            hilo_web.start()
+            base_web = "http://127.0.0.1:%d" % srv_web.server_address[1]
+            try:
+                html = requests.get(base_web + "/", timeout=10)
+                self.assertEqual(html.status_code, 200)
+                self.assertIn("Apartado de Evidencias", html.text)
+                self.assertIn("FERNANDA", html.text)
+
+                r_post = requests.post(
+                    base_web + "/api/incidencias",
+                    json={"tipo": "alerta", "descripcion": "Prueba desde portal"},
+                    timeout=10,
+                )
+                self.assertEqual(r_post.status_code, 201)
+                inc_id = r_post.json()["id"]
+
+                r_patch = requests.patch(
+                    f"{base_web}/api/incidencias/{inc_id}",
+                    json={"estado": "resuelta"},
+                    timeout=10,
+                )
+                self.assertEqual(r_patch.status_code, 200)
+                self.assertEqual(r_patch.json()["estado"], "resuelta")
+
+                r_put = requests.put(
+                    f"{base_web}/api/incidencias/{inc_id}",
+                    json={"tipo": "vulnerabilidad", "descripcion": "Reemplazada PUT"},
+                    timeout=10,
+                )
+                self.assertEqual(r_put.status_code, 200)
+                self.assertEqual(r_put.json()["estado"], "abierta")
+
+                r_estado = requests.get(base_web + "/api/estado", timeout=10)
+                self.assertEqual(r_estado.status_code, 200)
+                self.assertTrue(r_estado.json()["conectado"])
+                self.assertEqual(len(r_estado.json()["incidencias"]), 1)
+
+                r_conc = requests.post(base_web + "/api/evidencia/concurrencia", timeout=10)
+                self.assertEqual(r_conc.status_code, 200)
+                self.assertTrue(r_conc.json()["exito"])
+                self.assertEqual(r_conc.json()["codigos"], [200, 200, 200])
+
+                r_tol = requests.post(base_web + "/api/evidencia/tolerancia", timeout=10)
+                self.assertEqual(r_tol.status_code, 200)
+                self.assertTrue(r_tol.json()["exito"])
+                self.assertEqual(r_tol.json()["salud_posterior"], 200)
+
+                r_del = requests.delete(f"{base_web}/api/incidencias/{inc_id}", timeout=10)
+                self.assertEqual(r_del.status_code, 204)
+            finally:
+                srv_web.shutdown()
+                srv_web.server_close()
+                srv_https.shutdown()
+                srv_https.server_close()
 
 
 if __name__ == "__main__":
