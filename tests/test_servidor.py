@@ -14,6 +14,11 @@ import requests  # noqa: E402
 from almacen import AlmacenBitacora  # noqa: E402
 from agente_puertos import ejecutar_escaneo, verificar_recursos_locales  # noqa: E402
 from cliente_admin import ClienteAPI  # noqa: E402
+from cliente_pruebas_alertas import (  # noqa: E402
+    escenario_acumulacion_tres_abiertas,
+    escenario_umbral_cpu,
+    obtener_evidencia_alertas,
+)
 from generar_certificados import generar  # noqa: E402
 from manejador_http import ManejadorBitacora  # noqa: E402
 from notificador_telegram import NotificadorTelegram  # noqa: E402
@@ -340,6 +345,46 @@ class PruebasServidorTLS(unittest.TestCase):
         for inc in incidencias:
             if "96.0%" in inc["descripcion"]:
                 self.almacen.eliminar_incidencia(inc["id"])
+
+    def test_cliente_pruebas_alertas_levanta_evidencia(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            almacen_pr = AlmacenBitacora(
+                os.path.join(tmp, "i_pr.json"),
+                os.path.join(tmp, "a_pr.json"),
+            )
+            srv = ServidorBitacoraHTTPS(
+                ("127.0.0.1", 0),
+                almacen_pr,
+                NotificadorTelegram("", "", almacen_pr),
+                crear_contexto_tls(self.cert, self.llave),
+            )
+            hilo = threading.Thread(target=srv.serve_forever, daemon=True)
+            hilo.start()
+            try:
+                url = "https://127.0.0.1:%d" % srv.server_address[1]
+                cod_cpu, inc_cpu = escenario_umbral_cpu(url, self.cert, porcentaje=96.0)
+                self.assertEqual(cod_cpu, 201)
+                self.assertIn("96.0%", inc_cpu["descripcion"])
+
+                resultados = escenario_acumulacion_tres_abiertas(url, self.cert)
+                self.assertEqual([r[0] for r in resultados], [201, 201, 201])
+
+                evidencia = obtener_evidencia_alertas(url, self.cert)
+                self.assertEqual(len(evidencia["incidencias"]), 4)
+                self.assertGreaterEqual(len(evidencia["alertas"]), 2)
+                self.assertEqual(
+                    evidencia["alertas"][0]["motivo"],
+                    "UMBRAL_CRITICO_DIRECTO (1/1)",
+                )
+                self.assertTrue(
+                    any(
+                        str(a.get("motivo", "")).startswith("UMBRAL_ACUMULACION")
+                        for a in evidencia["alertas"]
+                    )
+                )
+            finally:
+                srv.shutdown()
+                srv.server_close()
 
 
 if __name__ == "__main__":
