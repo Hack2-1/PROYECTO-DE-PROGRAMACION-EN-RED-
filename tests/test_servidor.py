@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import requests  # noqa: E402
 
 from almacen import AlmacenBitacora  # noqa: E402
+from agente_puertos import ejecutar_escaneo  # noqa: E402
+from cliente_admin import ClienteAPI  # noqa: E402
 from generar_certificados import generar  # noqa: E402
 from manejador_http import ManejadorBitacora  # noqa: E402
 from notificador_telegram import NotificadorTelegram  # noqa: E402
@@ -63,10 +65,150 @@ class PruebasServidorTLS(unittest.TestCase):
             time.sleep(0.1)
         self.assertGreater(ahora, antes)
 
-    def test_ruta_inexistente_404_y_stubs_501(self):
+    def test_ruta_inexistente_404(self):
         self.assertEqual(requests.get(self.base + "/nada", verify=self.cert, timeout=10).status_code, 404)
-        self.assertEqual(requests.get(self.base + "/incidencias", verify=self.cert, timeout=10).status_code, 501)
-        self.assertEqual(requests.post(self.base + "/incidencias", json={}, verify=self.cert, timeout=10).status_code, 501)
+        self.assertEqual(requests.post(self.base + "/nada", json={}, verify=self.cert, timeout=10).status_code, 404)
+
+    def test_flujo_crud_y_auditoria_completo(self):
+        # F4: POST invalido -> 400; valido -> 201 (incidente dispara umbral -> SIN_CREDENCIALES)
+        self.assertEqual(
+            requests.post(self.base + "/incidencias", json={}, verify=self.cert, timeout=10).status_code,
+            400,
+        )
+        r1 = requests.post(
+            self.base + "/incidencias",
+            json={"tipo": "vulnerabilidad", "descripcion": "Puerto 23 abierto"},
+            verify=self.cert,
+            timeout=10,
+        )
+        self.assertEqual(r1.status_code, 201)
+        id1 = r1.json()["id"]
+
+        r2 = requests.post(
+            self.base + "/incidencias",
+            json={"tipo": "incidente", "descripcion": "Acceso no autorizado"},
+            verify=self.cert,
+            timeout=10,
+        )
+        self.assertEqual(r2.status_code, 201)
+        id2 = r2.json()["id"]
+
+        # F5: GET con filtros y detalle por ID
+        r_list = requests.get(
+            self.base + "/incidencias?tipo=vulnerabilidad&estado=abierta",
+            verify=self.cert,
+            timeout=10,
+        )
+        self.assertEqual(r_list.status_code, 200)
+        self.assertTrue(any(i["id"] == id1 for i in r_list.json()))
+        self.assertEqual(
+            requests.get(f"{self.base}/incidencias/{id2}", verify=self.cert, timeout=10).status_code,
+            200,
+        )
+        self.assertEqual(
+            requests.get(self.base + "/incidencias/abc", verify=self.cert, timeout=10).status_code,
+            400,
+        )
+        self.assertEqual(
+            requests.get(self.base + "/incidencias/99999", verify=self.cert, timeout=10).status_code,
+            404,
+        )
+
+        # F7: PATCH estado y PUT reemplazo completo
+        self.assertEqual(
+            requests.patch(
+                f"{self.base}/incidencias/{id1}",
+                json={"estado": "invalido"},
+                verify=self.cert,
+                timeout=10,
+            ).status_code,
+            400,
+        )
+        r_patch = requests.patch(
+            f"{self.base}/incidencias/{id1}",
+            json={"estado": "en_proceso"},
+            verify=self.cert,
+            timeout=10,
+        )
+        self.assertEqual(r_patch.status_code, 200)
+        self.assertEqual(r_patch.json()["estado"], "en_proceso")
+
+        r_put = requests.put(
+            f"{self.base}/incidencias/{id1}",
+            json={"tipo": "alerta", "descripcion": "Actualizada"},
+            verify=self.cert,
+            timeout=10,
+        )
+        self.assertEqual(r_put.status_code, 200)
+        self.assertEqual(r_put.json()["estado"], "abierta")
+
+        # F8: Auditoria y DELETE
+        self.assertEqual(requests.get(self.base + "/logs", verify=self.cert, timeout=10).status_code, 200)
+        self.assertEqual(requests.get(self.base + "/contadores", verify=self.cert, timeout=10).status_code, 200)
+        r_alertas = requests.get(self.base + "/alertas", verify=self.cert, timeout=10)
+        self.assertEqual(r_alertas.status_code, 200)
+        self.assertTrue(any(a.get("incidencia_id") == id2 for a in r_alertas.json()))
+
+        self.assertEqual(
+            requests.delete(f"{self.base}/incidencias/{id1}", verify=self.cert, timeout=10).status_code,
+            204,
+        )
+        self.assertEqual(
+            requests.get(f"{self.base}/incidencias/{id1}", verify=self.cert, timeout=10).status_code,
+            404,
+        )
+        self.assertEqual(
+            requests.delete(f"{self.base}/incidencias/{id2}", verify=self.cert, timeout=10).status_code,
+            204,
+        )
+
+    def test_integracion_agente_puertos_y_cliente_admin(self):
+        # F6: socket TCP abierto simulado -> agente_puertos reporta por HTTPS con X-API-Key
+        almacen_e2e = AlmacenBitacora(
+            os.path.join(self.dir.name, "i_e2e.json"),
+            os.path.join(self.dir.name, "a_e2e.json"),
+        )
+        srv = ServidorBitacoraHTTPS(
+            ("127.0.0.1", 0),
+            almacen_e2e,
+            NotificadorTelegram("", "", almacen_e2e),
+            crear_contexto_tls(self.cert, self.llave),
+            api_keys={"llave-equipo-01"},
+        )
+        hilo = threading.Thread(target=srv.serve_forever, daemon=True)
+        hilo.start()
+        escucha = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        escucha.bind(("127.0.0.1", 0))
+        escucha.listen(1)
+        puerto_abierto = escucha.getsockname()[1]
+        try:
+            url = "https://127.0.0.1:%d" % srv.server_address[1]
+            detectados = ejecutar_escaneo(
+                host="127.0.0.1",
+                puertos=[puerto_abierto],
+                lista_blanca=[],
+                url_servidor=url,
+                ruta_certificado=self.cert,
+                api_key="llave-equipo-01",
+            )
+            self.assertEqual(detectados, [puerto_abierto])
+
+            # F9: ClienteAPI autenticado consulta y cierra la incidencia detectada por F6
+            cliente = ClienteAPI(url, self.cert, api_key="llave-equipo-01")
+            cod, lista = cliente.solicitar("GET", "/incidencias")
+            self.assertEqual(cod, 200)
+            self.assertEqual(len(lista), 1)
+            self.assertIn(str(puerto_abierto), lista[0]["descripcion"])
+
+            cod_patch, actualizada = cliente.solicitar(
+                "PATCH", f"/incidencias/{lista[0]['id']}", {"estado": "resuelta"}
+            )
+            self.assertEqual(cod_patch, 200)
+            self.assertEqual(actualizada["estado"], "resuelta")
+        finally:
+            escucha.close()
+            srv.shutdown()
+            srv.server_close()
 
     def test_auditoria_automatica_cuenta_peticiones(self):
         antes = self.almacen.obtener_contadores()["por_metodo"].get("GET", 0)
