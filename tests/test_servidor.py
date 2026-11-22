@@ -1,3 +1,4 @@
+import io
 import os
 import socket
 import sys
@@ -5,6 +6,8 @@ import tempfile
 import threading
 import time
 import unittest
+
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
@@ -25,7 +28,9 @@ from notificador_telegram import NotificadorTelegram  # noqa: E402
 from servidor_bitacora import (  # noqa: E402
     MonitorRecursosServidor,
     ServidorBitacoraHTTPS,
+    construir_parser,
     crear_contexto_tls,
+    main as servidor_main,
 )
 
 
@@ -385,6 +390,22 @@ class PruebasServidorTLS(unittest.TestCase):
             finally:
                 srv.shutdown()
                 srv.server_close()
+
+    def test_puerto_configurable_y_aviso_si_esta_en_uso(self):
+        args = construir_parser().parse_args(["--host", "127.0.0.1", "--puerto", "8444"])
+        self.assertEqual((args.host, args.puerto), ("127.0.0.1", 8444))
+
+        salida_err = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch("servidor_bitacora.config.RUTA_CERTIFICADO", self.cert), \
+             mock.patch("servidor_bitacora.config.RUTA_LLAVE", self.llave), \
+             mock.patch("servidor_bitacora.config.RUTA_INCIDENCIAS", os.path.join(tmp, "i.json")), \
+             mock.patch("servidor_bitacora.config.RUTA_ALERTAS", os.path.join(tmp, "a.json")), \
+             mock.patch("sys.stderr", salida_err):
+            codigo = servidor_main(["--host", "127.0.0.1", "--puerto", str(self.puerto)])
+        self.assertEqual(codigo, 1)
+        self.assertIn("ya esta en uso", salida_err.getvalue())
+        self.assertIn("--puerto", salida_err.getvalue())
 
 
 if __name__ == "__main__":

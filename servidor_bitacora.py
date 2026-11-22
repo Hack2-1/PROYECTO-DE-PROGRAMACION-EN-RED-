@@ -6,6 +6,8 @@ Incluye MonitorRecursosServidor (cada 30s) para vigilar CPU, RAM, disco y
 alteraciones de seguridad, guardando evidencia en SQLite/JSON y alertando a Telegram.
 """
 
+import argparse
+import errno
 import os
 import shutil
 import socket
@@ -241,7 +243,34 @@ class ServidorBitacoraHTTPS(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-def main():
+def construir_parser():
+    parser = argparse.ArgumentParser(
+        description="F1 - Servidor concurrente sobre HTTPS/TLS y monitor de umbrales."
+    )
+    parser.add_argument(
+        "--host",
+        default=config.HOST,
+        help="Interfaz de escucha (por defecto: %s)" % config.HOST,
+    )
+    parser.add_argument(
+        "--puerto",
+        "--port",
+        dest="puerto",
+        type=int,
+        default=config.PUERTO,
+        help="Puerto HTTPS/TLS de escucha (por defecto: %d)" % config.PUERTO,
+    )
+    return parser
+
+
+def main(argv=None):
+    args = construir_parser().parse_args(argv)
+    host = args.host
+    puerto = args.puerto
+    if not (1 <= puerto <= 65535):
+        print("Puerto invalido (%d). Debe estar entre 1 y 65535." % puerto, file=sys.stderr)
+        return 1
+
     for ruta in (config.RUTA_CERTIFICADO, config.RUTA_LLAVE):
         try:
             open(ruta, "rb").close()
@@ -264,14 +293,26 @@ def main():
     )
     try:
         servidor = ServidorBitacoraHTTPS(
-            (config.HOST, config.PUERTO),
+            (host, puerto),
             almacen,
             notificador,
             contexto,
             api_keys=config.API_KEYS,
         )
     except OSError as exc:
-        print("No se pudo abrir %s:%d (%s)" % (config.HOST, config.PUERTO, exc), file=sys.stderr)
+        if exc.errno == errno.EADDRINUSE:
+            alternativo = puerto + 1 if puerto < 65535 else 8444
+            print(
+                "El puerto %d ya esta en uso (%s:%d).\n"
+                "Opciones:\n"
+                "  1. Conectate directamente al servidor activo en https://localhost:%d\n"
+                "  2. Deten el servidor anterior: pkill -f servidor_bitacora.py\n"
+                "  3. Inicia otra instancia en otro puerto: python3 servidor_bitacora.py --puerto %d"
+                % (puerto, host, puerto, puerto, alternativo),
+                file=sys.stderr,
+            )
+        else:
+            print("No se pudo abrir %s:%d (%s)" % (host, puerto, exc), file=sys.stderr)
         return 1
 
     credenciales = "activo" if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID else "SIN credenciales"
@@ -282,7 +323,7 @@ def main():
             config.ADMIN_CHAT_IDS,
             almacen,
             info_servidor={
-                "puerto": config.PUERTO,
+                "puerto": puerto,
                 "tls": "HTTPS/TLS, minimo TLS 1.2",
                 "obtener_metricas": obtener_metricas_sistema,
             },
@@ -304,8 +345,8 @@ def main():
     print(
         "Bitacora HTTPS escuchando en https://%s:%d (Telegram: %s, bot: %s, monitor %ds: %s)"
         % (
-            config.HOST,
-            config.PUERTO,
+            host,
+            puerto,
             credenciales,
             "activos" if bot else "desactivados",
             config.INTERVALO_MONITOR,
